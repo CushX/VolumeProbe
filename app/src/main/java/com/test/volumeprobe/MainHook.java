@@ -5,7 +5,6 @@ import io.github.libxposed.api.XposedModule;
 import io.github.libxposed.api.XposedInterface;
 import io.github.libxposed.api.XposedModuleInterface;
 import java.lang.reflect.Method;
-import java.util.List;
 
 public class MainHook extends XposedModule {
     private static final String TAG = "VolumeProbe";
@@ -13,83 +12,67 @@ public class MainHook extends XposedModule {
     @Override
     public void onModuleLoaded(XposedModuleInterface.ModuleLoadedParam param) {
         super.onModuleLoaded(param);
-        log(Log.INFO, TAG, "=== 模块已加载 ===");
+        log(Log.INFO, TAG, "=== 模块已加载到进程: " + param.getProcessName() + " ===");
     }
 
+    // 这里保持静默，我们现在的目标是 SystemUI
     @Override
     public void onSystemServerStarting(XposedModuleInterface.SystemServerStartingParam param) {
         super.onSystemServerStarting(param);
-        try {
-            Class<?> audioServiceClass = param.getClassLoader().loadClass("com.android.server.audio.AudioService");
-            String[] targetMethods = {"setStreamVolume", "adjustStreamVolume", "adjustSuggestedStreamVolume"};
+    }
 
-            for (Method method : audioServiceClass.getDeclaredMethods()) {
-                if (java.util.Arrays.asList(targetMethods).contains(method.getName())) {
-                    hook(method).intercept(new TargetVolumeHooker(method.getName()));
+    // 🌟 重点：由于作用域需要包含 SystemUI，我们要处理包的加载
+    @Override
+    public void onPackageLoaded(XposedModuleInterface.PackageLoadedParam param) {
+        super.onPackageLoaded(param);
+        String pkgName = param.getPackageName();
+        
+        // 我们只潜伏进系统 UI (音量面板所在的进程)
+        if (!pkgName.equals("com.android.systemui")) {
+            return;
+        }
+
+        log(Log.INFO, TAG, "=== 探针成功潜入系统 UI 进程 ===");
+
+        try {
+            // 尝试查找系统 UI 里的音量面板类 (基于 AOSP 源码标准命名)
+            Class<?> volumeDialogClass = param.getClassLoader().loadClass("com.android.systemui.volume.VolumeDialogImpl");
+            
+            int hookedCount = 0;
+            // 寻找面板显示的入口方法 (通常是 show 或 showH)
+            for (Method method : volumeDialogClass.getDeclaredMethods()) {
+                String methodName = method.getName();
+                // 只要方法名是 show 或者 showH，统统挂载
+                if (methodName.equals("showH") || methodName.equals("show")) {
+                    hook(method).intercept(new DialogShowHooker(methodName));
+                    log(Log.INFO, TAG, "== 成功挂载音量面板方法: " + methodName + " ==");
+                    hookedCount++;
                 }
             }
-            log(Log.INFO, TAG, "=== 终极参数探针部署完毕 ===");
+            
+            if (hookedCount == 0) {
+                log(Log.ERROR, TAG, "== 没有找到 show 方法，可能类名或方法被混淆 ==");
+            }
+
         } catch (Throwable t) {
-            log(Log.ERROR, TAG, "异常: " + t);
+            // 如果找不到类，会在这里报错
+            log(Log.ERROR, TAG, "== SystemUI 探针挂载失败 (可能类名变了): " + t + " ==");
         }
     }
 
-    private static class TargetVolumeHooker implements XposedInterface.Hooker {
+    private static class DialogShowHooker implements XposedInterface.Hooker {
         private final String name;
-        private static long lastLogTime = 0;
-
-        public TargetVolumeHooker(String name) {
-            this.name = name;
-        }
+        public DialogShowHooker(String name) { this.name = name; }
 
         @Override
         public Object intercept(XposedInterface.Chain chain) throws Throwable {
-            List<Object> args = chain.getArgs();
+            // 记录一下面板弹出的瞬间（加上防抖，避免刷屏）
+            Log.d(TAG, "【UI探针】系统音量面板被呼出了！触发方法: " + name);
             
-            // 找寻参数中有没有 "3"（代表媒体音量）
-            boolean isMedia = false;
-            for (Object arg : args) {
-                if (arg instanceof Integer && (Integer)arg == 3) {
-                    isMedia = true; break;
-                }
-            }
-            
-            // 只有媒体音量，并且距离上次打印超过 500 毫秒才打印，防止日志刷屏
-            if (isMedia) {
-                long now = System.currentTimeMillis();
-                if (now - lastLogTime > 500) {
-                    lastLogTime = now;
-                    
-                    StringBuilder sb = new StringBuilder("【🔥触发】" + name + " 的所有参数: \n");
-                    for (int i = 0; i < args.size(); i++) {
-                        Object arg = args.get(i);
-                        String type = arg == null ? "null" : arg.getClass().getSimpleName();
-                        sb.append(" 参数[").append(i).append("] (").append(type).append(") = ").append(arg).append("\n");
-                    }
-                    
-                    // 顺便尝试打印一下到底是哪个包名发起的
-                    if (VolumeProbeLogger.getInstance() != null) {
-                        VolumeProbeLogger.getInstance().log(Log.DEBUG, TAG, sb.toString());
-                    }
-                }
-            }
+            // 我们在这里绝不修改 UI，直接放行，让系统自己画面板
             return chain.proceed();
         }
     }
 
-    public static class VolumeProbeLogger {
-        private static VolumeProbeLogger instance;
-        public VolumeProbeLogger(XposedModule module) {}
-        public static VolumeProbeLogger getInstance() { return instance; }
-        public void log(int priority, String tag, String msg) {}
-    }
-
-    public MainHook() {
-        VolumeProbeLogger.instance = new VolumeProbeLogger(this) {
-            @Override
-            public void log(int priority, String tag, String msg) {
-                MainHook.this.log(priority, tag, msg);
-            }
-        };
-    }
+    public MainHook() {}
 }
