@@ -1,6 +1,11 @@
 package com.test.volumeprobe;
 
+import android.content.Context;
+import android.graphics.Color;
 import android.util.Log;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.TextView;
 import io.github.libxposed.api.XposedModule;
 import io.github.libxposed.api.XposedInterface;
 import io.github.libxposed.api.XposedModuleInterface;
@@ -20,53 +25,66 @@ public class MainHook extends XposedModule {
         super.onPackageReady(param);
         if (!param.getPackageName().equals("com.android.systemui")) return;
 
-        log(Log.INFO, TAG, "=== 准备拦截真正的音量面板 ===");
-
         try {
             ClassLoader cl = param.getDefaultClassLoader();
-            
-            // 🌟 就是你截图里发现的真神！
             String targetClassName = "com.android.systemui.volume.dialog.VolumeDialog";
-            
             Class<?> clazz = cl.loadClass(targetClassName);
-            log(Log.INFO, TAG, "✅ 成功找到类: " + targetClassName);
-
-            int count = 0;
-            // 遍历它的所有方法，看看它到底有哪些显示/隐藏的方法
-            for (Method method : clazz.getDeclaredMethods()) {
-                String methodName = method.getName();
-                
-                // 通常音量面板的显示方法叫 show 或者 showH
-                if (methodName.equals("show") || methodName.equals("showH")) {
-                    hook(method).intercept(new DialogHooker(methodName));
-                    log(Log.INFO, TAG, "== 成功挂载方法: " + methodName + " ==");
-                    count++;
-                }
-            }
             
-            if (count == 0) {
-                // 如果没找到 show，我们就把所有方法名打印出来看看
-                log(Log.DEBUG, TAG, "没找到 show 方法，这个类的方法有:");
-                for (Method m : clazz.getDeclaredMethods()) {
-                    log(Log.DEBUG, TAG, "  -> " + m.getName());
+            // 这次我们挂载 onCreate，因为布局是在这里初始化的
+            for (Method method : clazz.getDeclaredMethods()) {
+                if (method.getName().equals("onCreate")) {
+                    hook(method).intercept(new UIInjectorHooker());
+                    log(Log.INFO, TAG, "== 成功挂载 onCreate 方法 ==");
                 }
             }
-
         } catch (Throwable t) {
             log(Log.ERROR, TAG, "挂载异常: " + t);
         }
     }
 
-    private static class DialogHooker implements XposedInterface.Hooker {
-        private final String methodName;
-        public DialogHooker(String methodName) { this.methodName = methodName; }
-
+    private static class UIInjectorHooker implements XposedInterface.Hooker {
         @Override
         public Object intercept(XposedInterface.Chain chain) throws Throwable {
-            Log.d(TAG, "🔥【UI探针】音量面板被呼出了！方法: " + methodName);
+            // 1. 先让原生面板正常加载完 XML 布局
+            Object result = chain.proceed();
             
-            // 这里我们不修改任何东西，直接放行
-            return chain.proceed();
+            try {
+                Object dialogInstance = chain.getThisObject(); 
+                if (dialogInstance == null) return result;
+
+                // 2. 使用反射调用 requireViewById(0x7f0a09cc) 获取那个核心容器
+                // 注意：在代码里，0x7f0a09cc 是一个整数
+                Method requireViewByIdMethod = dialogInstance.getClass().getMethod("requireViewById", int.class);
+                Object containerView = requireViewByIdMethod.invoke(dialogInstance, 0x7f0a09cc);
+                
+                if (!(containerView instanceof ViewGroup)) {
+                    Log.e(TAG, "获取到的容器不是 ViewGroup");
+                    return result;
+                }
+
+                ViewGroup rootContainer = (ViewGroup) containerView;
+                Context context = rootContainer.getContext();
+
+                // 3. 创建我们要的按钮
+                TextView myButton = new TextView(context);
+                myButton.setText("分应用面板");
+                myButton.setTextColor(Color.WHITE);
+                myButton.setBackgroundColor(Color.RED);
+                myButton.setTextSize(14);
+                
+                int pad = (int) (16 * context.getResources().getDisplayMetrics().density);
+                myButton.setPadding(pad, pad, pad, pad);
+
+                // 4. 把按钮塞进这个白色卡片里！
+                rootContainer.addView(myButton);
+
+                Log.d(TAG, "🔥【注入成功】测试按钮已经塞进音量卡片！");
+                
+            } catch (Throwable t) {
+                Log.e(TAG, "注入 UI 失败: " + t);
+            }
+
+            return result;
         }
     }
 
