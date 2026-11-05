@@ -5,6 +5,8 @@ import android.graphics.Color;
 import android.util.Log;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.LinearLayout;
+import android.widget.SeekBar;
 import android.widget.TextView;
 import io.github.libxposed.api.XposedModule;
 import io.github.libxposed.api.XposedInterface;
@@ -17,7 +19,7 @@ public class MainHook extends XposedModule {
     @Override
     public void onModuleLoaded(XposedModuleInterface.ModuleLoadedParam param) {
         super.onModuleLoaded(param);
-        log(Log.INFO, TAG, "=== 模块已加载到进程: " + param.getProcessName() + " ===");
+        log(Log.INFO, TAG, "=== 模块已加载 ===");
     }
 
     @Override
@@ -25,19 +27,14 @@ public class MainHook extends XposedModule {
         super.onPackageReady(param);
         if (!param.getPackageName().equals("com.android.systemui")) return;
 
-        log(Log.INFO, TAG, "=== 准备拦截真正的音量面板 ===");
-
         try {
             ClassLoader cl = param.getDefaultClassLoader();
-            String targetClassName = "com.android.systemui.volume.dialog.VolumeDialog";
-            Class<?> clazz = cl.loadClass(targetClassName);
-            log(Log.INFO, TAG, "✅ 成功找到类: " + targetClassName);
+            Class<?> clazz = cl.loadClass("com.android.systemui.volume.dialog.VolumeDialog");
 
-            // 🌟 这次我们只盯准 onCreate，因为界面的根容器是在这里加载的
             for (Method method : clazz.getDeclaredMethods()) {
                 if (method.getName().equals("onCreate")) {
                     hook(method).intercept(new UIInjectorHooker());
-                    log(Log.INFO, TAG, "== 成功挂载 onCreate 方法，准备注入 UI ==");
+                    log(Log.INFO, TAG, "== 成功挂载 onCreate，准备注入 ==");
                 }
             }
         } catch (Throwable t) {
@@ -48,49 +45,83 @@ public class MainHook extends XposedModule {
     private static class UIInjectorHooker implements XposedInterface.Hooker {
         @Override
         public Object intercept(XposedInterface.Chain chain) throws Throwable {
-            // 1. 先让原生的 onCreate 跑完，保证原来的音量面板已经画好
             Object result = chain.proceed();
             
             try {
                 Object dialogInstance = chain.getThisObject(); 
-                if (dialogInstance == null) return result;
-
-                // 2. 用反射调用 requireViewById(0x7f0a09cc) 拿到那个装音量条的白色卡片
                 Method requireViewByIdMethod = dialogInstance.getClass().getMethod("requireViewById", int.class);
+                // 根据你提供的 smali，这是根布局 ID
                 Object containerView = requireViewByIdMethod.invoke(dialogInstance, 0x7f0a09cc);
                 
-                if (!(containerView instanceof ViewGroup)) {
-                    Log.e(TAG, "获取到的容器不是 ViewGroup，无法注入");
-                    return result;
-                }
-
+                if (!(containerView instanceof ViewGroup)) return result;
                 ViewGroup rootContainer = (ViewGroup) containerView;
                 Context context = rootContainer.getContext();
 
-                // 3. 创建一个超显眼的红色按钮用来测试
+                // 1. 创建一个好看的测试按钮
                 TextView myButton = new TextView(context);
-                myButton.setText("⚙️ 分应用面板");
+                myButton.setText("⚙️ 分应用控制");
                 myButton.setTextColor(Color.WHITE);
-                myButton.setBackgroundColor(Color.RED);
-                myButton.setTextSize(16);
+                myButton.setBackgroundColor(Color.parseColor("#6200EE")); // 紫色，比红色好看点
+                myButton.setTextSize(14);
                 myButton.setGravity(android.view.Gravity.CENTER);
-                
-                // 设置一点点内边距
-                int pad = (int) (12 * context.getResources().getDisplayMetrics().density);
+                int pad = (int) (8 * context.getResources().getDisplayMetrics().density);
                 myButton.setPadding(pad, pad, pad, pad);
 
-                // 4. 暴力塞进卡片里！
-                rootContainer.addView(myButton);
-
-                Log.d(TAG, "🔥【注入成功】测试按钮已经塞进音量卡片！");
+                // 2. 🌟 核心逻辑：去找原生的音量条容器
+                // 我们在根布局里寻找包含 SeekBar(音量条) 的父容器
+                ViewGroup targetContainer = findVolumePanelContainer(rootContainer);
                 
+                if (targetContainer != null) {
+                    Log.d(TAG, "【定位成功】找到原生的排版容器: " + targetContainer.getClass().getName());
+                    
+                    if (targetContainer instanceof LinearLayout) {
+                        // 如果原生的容器是垂直排列的线性布局，我们直接把按钮加在它最下面
+                        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                                ViewGroup.LayoutParams.WRAP_CONTENT
+                        );
+                        params.topMargin = pad; // 给点顶部间距
+                        myButton.setLayoutParams(params);
+                    } else {
+                        // 其他类型的布局，给个默认参数
+                        myButton.setLayoutParams(new ViewGroup.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                                ViewGroup.LayoutParams.WRAP_CONTENT
+                        ));
+                    }
+                    targetContainer.addView(myButton);
+                    Log.d(TAG, "🔥【注入成功】按钮已融入原生容器！");
+                } else {
+                    Log.e(TAG, "❌ 没找到包含 SeekBar 的容器，只能塞在根节点了");
+                    rootContainer.addView(myButton);
+                }
+
             } catch (Throwable t) {
-                // 就算注入失败，也绝对不能抛出异常，否则 SystemUI 会崩溃
                 Log.e(TAG, "注入 UI 失败: " + t);
             }
 
             return result;
         }
+    }
+
+    // 递归寻找包含 SeekBar 的父容器
+    private static ViewGroup findVolumePanelContainer(ViewGroup parent) {
+        for (int i = 0; i < parent.getChildCount(); i++) {
+            View child = parent.getChildAt(i);
+            if (child instanceof ViewGroup) {
+                ViewGroup childGroup = (ViewGroup) child;
+                // 如果这个容器里面直接包含了 SeekBar，那它就是我们要找的卡片！
+                for (int j = 0; j < childGroup.getChildCount(); j++) {
+                    if (childGroup.getChildAt(j) instanceof SeekBar) {
+                        return childGroup;
+                    }
+                }
+                // 如果没找到，继续往深处找
+                ViewGroup result = findVolumePanelContainer(childGroup);
+                if (result != null) return result;
+            }
+        }
+        return null;
     }
 
     public MainHook() {}
