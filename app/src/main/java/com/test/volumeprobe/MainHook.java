@@ -1,7 +1,6 @@
 package com.test.volumeprobe;
 
 import android.util.Log;
-import androidx.annotation.NonNull;
 import io.github.libxposed.api.XposedModule;
 import io.github.libxposed.api.XposedInterface;
 import io.github.libxposed.api.XposedModuleInterface;
@@ -21,11 +20,14 @@ public class MainHook extends XposedModule {
         super.onSystemServerStarting(param);
         log(Log.INFO, TAG, "=== 准备 Hook AudioService (API 102) ===");
         try {
-            Class<?> audioServiceClass = param.getClassLoader()
-                    .loadClass("com.android.server.audio.AudioService");
+            // 加载 AudioService 类
+            Class<?> audioServiceClass = param.getClassLoader().loadClass("com.android.server.audio.AudioService");
+            // 获取 setStreamVolume 方法
             Method setStreamVolumeMethod = audioServiceClass.getDeclaredMethod(
                     "setStreamVolume", int.class, int.class, int.class, String.class
             );
+            
+            // 安装 Hook
             hook(setStreamVolumeMethod).intercept(new SetStreamVolumeHooker());
             log(Log.INFO, TAG, "=== setStreamVolume Hook 安装成功 ===");
         } catch (Throwable t) {
@@ -33,18 +35,19 @@ public class MainHook extends XposedModule {
         }
     }
 
-    // 注意：Hooker 接口没有泛型
+    // Hooker 接口实现（去掉所有非必要的注解）
     private static class SetStreamVolumeHooker implements XposedInterface.Hooker {
         @Override
-        public Object intercept(@NonNull XposedInterface.Chain chain) throws Throwable {
-            // getArg(index) 是获取参数更安全的方式
+        public Object intercept(XposedInterface.Chain chain) throws Throwable {
+            // 直接从 Chain 中获取参数
             int streamType = (int) chain.getArg(0);
             int index = (int) chain.getArg(1);
 
-            if (streamType == 3) { // AudioManager.STREAM_MUSIC
+            if (streamType == 3) { // AudioManager.STREAM_MUSIC (媒体音量)
                 Log.d(TAG, "【拦截成功】滑动媒体音量，目标值: " + index);
             }
-            // 必须调用 proceed() 放行
+
+            // 放行原始方法
             return chain.proceed();
         }
     }
