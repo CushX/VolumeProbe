@@ -1,10 +1,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application android:label="音量探针V2" android:icon="@android:drawable/ic_menu_manage">
-        <activity android:name=".DummyActivity" android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
+        <meta-data android:name="xposedmodule" android:value="true" />
+        <meta-data android:name="xposeddescription" android:value="API 102 测试" />
+        <meta-data android:name="xposedminversion" android:value="93" />
+        <!-- 这里加入了 systemui -->
+        <meta-data android:name="xposedscope" android:value="android,com.android.systemui" />
     </application>
 </manifest>
