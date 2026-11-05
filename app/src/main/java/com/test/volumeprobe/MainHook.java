@@ -5,8 +5,6 @@ import android.graphics.Color;
 import android.util.Log;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.LinearLayout;
-import android.widget.SeekBar;
 import android.widget.TextView;
 import io.github.libxposed.api.XposedModule;
 import io.github.libxposed.api.XposedInterface;
@@ -34,7 +32,7 @@ public class MainHook extends XposedModule {
             for (Method method : clazz.getDeclaredMethods()) {
                 if (method.getName().equals("onCreate")) {
                     hook(method).intercept(new UIInjectorHooker());
-                    log(Log.INFO, TAG, "== 成功挂载 onCreate，准备注入 ==");
+                    log(Log.INFO, TAG, "== 成功挂载 onCreate ==");
                 }
             }
         } catch (Throwable t) {
@@ -50,51 +48,30 @@ public class MainHook extends XposedModule {
             try {
                 Object dialogInstance = chain.getThisObject(); 
                 Method requireViewByIdMethod = dialogInstance.getClass().getMethod("requireViewById", int.class);
-                // 根据你提供的 smali，这是根布局 ID
+                
+                // 获取我们在 smali 里发现的根视图 ID
                 Object containerView = requireViewByIdMethod.invoke(dialogInstance, 0x7f0a09cc);
                 
                 if (!(containerView instanceof ViewGroup)) return result;
                 ViewGroup rootContainer = (ViewGroup) containerView;
-                Context context = rootContainer.getContext();
 
-                // 1. 创建一个好看的测试按钮
+                // 🌟 1. 打印整棵 UI 树的层级和 ID
+                Log.d(TAG, "========== [UI树] 开始打印 ==========");
+                dumpViewHierarchy(rootContainer, 0);
+                Log.d(TAG, "========== [UI树] 打印结束 ==========");
+
+                // 🌟 2. 依然先塞一个测试按钮（方便你视觉上确认）
+                Context context = rootContainer.getContext();
                 TextView myButton = new TextView(context);
-                myButton.setText("⚙️ 分应用控制");
+                myButton.setText("⚙️ 测试注入");
                 myButton.setTextColor(Color.WHITE);
-                myButton.setBackgroundColor(Color.parseColor("#6200EE")); // 紫色，比红色好看点
-                myButton.setTextSize(14);
-                myButton.setGravity(android.view.Gravity.CENTER);
+                myButton.setBackgroundColor(Color.parseColor("#2196F3")); // 蓝色
+                myButton.setTextSize(12);
                 int pad = (int) (8 * context.getResources().getDisplayMetrics().density);
                 myButton.setPadding(pad, pad, pad, pad);
 
-                // 2. 🌟 核心逻辑：去找原生的音量条容器
-                // 我们在根布局里寻找包含 SeekBar(音量条) 的父容器
-                ViewGroup targetContainer = findVolumePanelContainer(rootContainer);
-                
-                if (targetContainer != null) {
-                    Log.d(TAG, "【定位成功】找到原生的排版容器: " + targetContainer.getClass().getName());
-                    
-                    if (targetContainer instanceof LinearLayout) {
-                        // 如果原生的容器是垂直排列的线性布局，我们直接把按钮加在它最下面
-                        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                                ViewGroup.LayoutParams.MATCH_PARENT,
-                                ViewGroup.LayoutParams.WRAP_CONTENT
-                        );
-                        params.topMargin = pad; // 给点顶部间距
-                        myButton.setLayoutParams(params);
-                    } else {
-                        // 其他类型的布局，给个默认参数
-                        myButton.setLayoutParams(new ViewGroup.LayoutParams(
-                                ViewGroup.LayoutParams.MATCH_PARENT,
-                                ViewGroup.LayoutParams.WRAP_CONTENT
-                        ));
-                    }
-                    targetContainer.addView(myButton);
-                    Log.d(TAG, "🔥【注入成功】按钮已融入原生容器！");
-                } else {
-                    Log.e(TAG, "❌ 没找到包含 SeekBar 的容器，只能塞在根节点了");
-                    rootContainer.addView(myButton);
-                }
+                rootContainer.addView(myButton);
+                Log.d(TAG, "🔥 按钮已塞入根容器！");
 
             } catch (Throwable t) {
                 Log.e(TAG, "注入 UI 失败: " + t);
@@ -104,24 +81,32 @@ public class MainHook extends XposedModule {
         }
     }
 
-    // 递归寻找包含 SeekBar 的父容器
-    private static ViewGroup findVolumePanelContainer(ViewGroup parent) {
-        for (int i = 0; i < parent.getChildCount(); i++) {
-            View child = parent.getChildAt(i);
-            if (child instanceof ViewGroup) {
-                ViewGroup childGroup = (ViewGroup) child;
-                // 如果这个容器里面直接包含了 SeekBar，那它就是我们要找的卡片！
-                for (int j = 0; j < childGroup.getChildCount(); j++) {
-                    if (childGroup.getChildAt(j) instanceof SeekBar) {
-                        return childGroup;
-                    }
-                }
-                // 如果没找到，继续往深处找
-                ViewGroup result = findVolumePanelContainer(childGroup);
-                if (result != null) return result;
+    // 🌟 递归打印 View 树
+    private static void dumpViewHierarchy(View view, int depth) {
+        if (view == null) return;
+
+        StringBuilder indent = new StringBuilder();
+        for (int i = 0; i < depth; i++) indent.append("  "); // 缩进，体现层级
+
+        String viewName = view.getClass().getSimpleName();
+        String idName = "NO_ID";
+        try {
+            int id = view.getId();
+            if (id != View.NO_ID) {
+                // 把数字 ID 转换成真正的名字，比如 settings_button
+                idName = view.getResources().getResourceEntryName(id);
+            }
+        } catch (Throwable ignored) {}
+
+        // 带有 [UI树] 标签，方便你在日志里搜索
+        Log.d(TAG, "[UI树] " + indent + "-> " + viewName + " (id: " + idName + ")");
+
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) {
+                dumpViewHierarchy(group.getChildAt(i), depth + 1); // 深入下一层
             }
         }
-        return null;
     }
 
     public MainHook() {}
