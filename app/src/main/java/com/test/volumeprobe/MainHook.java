@@ -12,55 +12,73 @@ public class MainHook extends XposedModule {
     @Override
     public void onModuleLoaded(XposedModuleInterface.ModuleLoadedParam param) {
         super.onModuleLoaded(param);
-        log(Log.INFO, TAG, "=== 模块已加载到进程: " + param.getProcessName() + " ===");
+        log(Log.INFO, TAG, "=== 模块已加载 ===");
     }
 
     @Override
     public void onSystemServerStarting(XposedModuleInterface.SystemServerStartingParam param) {
         super.onSystemServerStarting(param);
-        log(Log.INFO, TAG, "=== 开启【天罗地网】全量 Hook 模式 ===");
+        log(Log.INFO, TAG, "=== 开始精准挂载 ===");
         try {
             Class<?> audioServiceClass = param.getClassLoader().loadClass("com.android.server.audio.AudioService");
-            int count = 0;
             
-            // 遍历 AudioService 里的所有方法
+            // 核心打击目标：这几个是系统和APP调音量的必经之路
+            String[] targetMethods = {
+                "setStreamVolume", 
+                "adjustStreamVolume", 
+                "adjustSuggestedStreamVolume"
+            };
+
             for (Method method : audioServiceClass.getDeclaredMethods()) {
-                String methodName = method.getName();
-                // 只要方法名包含 Volume，统统 Hook 住！
-                if (methodName.contains("Volume")) {
-                    try {
-                        hook(method).intercept(new UniversalVolumeHooker(methodName));
-                        count++;
-                        log(Log.INFO, TAG, "== 成功挂载方法: " + methodName + " ==");
-                    } catch (Throwable t) {
-                        log(Log.ERROR, TAG, "挂载 " + methodName + " 失败: " + t);
-                    }
+                if (java.util.Arrays.asList(targetMethods).contains(method.getName())) {
+                    hook(method).intercept(new TargetVolumeHooker(method.getName()));
+                    log(Log.INFO, TAG, "== 成功挂载: " + method.getName() + " ==");
                 }
             }
-            log(Log.INFO, TAG, "=== 天罗地网部署完毕，共挂了 " + count + " 个方法 ===");
         } catch (Throwable t) {
-            log(Log.ERROR, TAG, "核心异常: " + t.toString());
+            log(Log.ERROR, TAG, "异常: " + t);
         }
     }
 
-    // 万能拦截器
-    private static class UniversalVolumeHooker implements XposedInterface.Hooker {
-        private final String methodName;
+    private static class TargetVolumeHooker implements XposedInterface.Hooker {
+        private final String name;
 
-        public UniversalVolumeHooker(String methodName) {
-            this.methodName = methodName;
+        public TargetVolumeHooker(String name) {
+            this.name = name;
         }
 
         @Override
         public Object intercept(XposedInterface.Chain chain) throws Throwable {
-            // 把当前执行的方法名和参数全打印出来
-            StringBuilder sb = new StringBuilder("【捕获】方法: " + methodName + " | 参数: ");
-            for (Object arg : chain.getArgs()) {
-                sb.append(arg).append(", ");
+            try {
+                // 使用框架自带的 log，一定能出现在 LSPosed 日志里！
+                if (VolumeProbeLogger.getInstance() != null) {
+                    VolumeProbeLogger.getInstance().log(Log.DEBUG, TAG, 
+                        "【🔥触发】方法: " + name + " | 参数个数: " + chain.getArgs().size());
+                }
+            } catch (Throwable ignored) {
+                // 哪怕打印日志报错，也不能影响系统正常的调音量
             }
-            Log.d(TAG, sb.toString());
-            
             return chain.proceed();
         }
+    }
+
+    // 用于在静态类中获取当前的 Module 实例来打日志
+    public static class VolumeProbeLogger {
+        private static VolumeProbeLogger instance;
+        public VolumeProbeLogger(XposedModule module) {}
+        
+        public static VolumeProbeLogger getInstance() { return instance; }
+        
+        public void log(int priority, String tag, String msg) {}
+    }
+
+    // 初始化 Logger
+    public MainHook() {
+        VolumeProbeLogger.instance = new VolumeProbeLogger(this) {
+            @Override
+            public void log(int priority, String tag, String msg) {
+                MainHook.this.log(priority, tag, msg);
+            }
+        };
     }
 }
