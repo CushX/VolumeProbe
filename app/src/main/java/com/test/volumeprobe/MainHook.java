@@ -13,6 +13,10 @@ import java.lang.reflect.Method;
 
 public class MainHook extends XposedModule {
     private static final String TAG = "VolumeProbe";
+    
+    // 静态开关，确保 UI 树只打印一次，按钮只注入一次
+    private static boolean hasDumped = false;
+    private static boolean hasInjected = false;
 
     @Override
     public void onModuleLoaded(XposedModuleInterface.ModuleLoadedParam param) {
@@ -29,10 +33,11 @@ public class MainHook extends XposedModule {
             ClassLoader cl = param.getDefaultClassLoader();
             Class<?> clazz = cl.loadClass("com.android.systemui.volume.dialog.VolumeDialog");
 
+            // 🌟 这次挂载 onStart，保证每次弹面板必定能抓到
             for (Method method : clazz.getDeclaredMethods()) {
-                if (method.getName().equals("onCreate")) {
+                if (method.getName().equals("onStart")) {
                     hook(method).intercept(new UIInjectorHooker());
-                    log(Log.INFO, TAG, "== 成功挂载 onCreate ==");
+                    log(Log.INFO, TAG, "== 成功挂载 onStart ==");
                 }
             }
         } catch (Throwable t) {
@@ -43,9 +48,11 @@ public class MainHook extends XposedModule {
     private static class UIInjectorHooker implements XposedInterface.Hooker {
         @Override
         public Object intercept(XposedInterface.Chain chain) throws Throwable {
-            Object result = chain.proceed();
+            Object result = chain.proceed(); // 先让系统正常显示面板
             
             try {
+                if (hasInjected && hasDumped) return result; // 如果已经做过，直接返回
+
                 Object dialogInstance = chain.getThisObject(); 
                 Method requireViewByIdMethod = dialogInstance.getClass().getMethod("requireViewById", int.class);
                 
@@ -55,23 +62,29 @@ public class MainHook extends XposedModule {
                 if (!(containerView instanceof ViewGroup)) return result;
                 ViewGroup rootContainer = (ViewGroup) containerView;
 
-                // 🌟 1. 打印整棵 UI 树的层级和 ID
-                Log.d(TAG, "========== [UI树] 开始打印 ==========");
-                dumpViewHierarchy(rootContainer, 0);
-                Log.d(TAG, "========== [UI树] 打印结束 ==========");
+                // 🌟 1. 打印整棵 UI 树
+                if (!hasDumped) {
+                    Log.d(TAG, "========== [UI树] 开始打印 ==========");
+                    dumpViewHierarchy(rootContainer, 0);
+                    Log.d(TAG, "========== [UI树] 打印结束 ==========");
+                    hasDumped = true;
+                }
 
-                // 🌟 2. 依然先塞一个测试按钮（方便你视觉上确认）
-                Context context = rootContainer.getContext();
-                TextView myButton = new TextView(context);
-                myButton.setText("⚙️ 测试注入");
-                myButton.setTextColor(Color.WHITE);
-                myButton.setBackgroundColor(Color.parseColor("#2196F3")); // 蓝色
-                myButton.setTextSize(12);
-                int pad = (int) (8 * context.getResources().getDisplayMetrics().density);
-                myButton.setPadding(pad, pad, pad, pad);
+                // 🌟 2. 注入按钮
+                if (!hasInjected) {
+                    Context context = rootContainer.getContext();
+                    TextView myButton = new TextView(context);
+                    myButton.setText("⚙️ 测试注入");
+                    myButton.setTextColor(Color.WHITE);
+                    myButton.setBackgroundColor(Color.parseColor("#2196F3")); // 蓝色
+                    myButton.setTextSize(12);
+                    int pad = (int) (8 * context.getResources().getDisplayMetrics().density);
+                    myButton.setPadding(pad, pad, pad, pad);
 
-                rootContainer.addView(myButton);
-                Log.d(TAG, "🔥 按钮已塞入根容器！");
+                    rootContainer.addView(myButton);
+                    Log.d(TAG, "🔥 按钮已塞入根容器！");
+                    hasInjected = true;
+                }
 
             } catch (Throwable t) {
                 Log.e(TAG, "注入 UI 失败: " + t);
@@ -81,30 +94,28 @@ public class MainHook extends XposedModule {
         }
     }
 
-    // 🌟 递归打印 View 树
+    // 递归打印 View 树
     private static void dumpViewHierarchy(View view, int depth) {
         if (view == null) return;
 
         StringBuilder indent = new StringBuilder();
-        for (int i = 0; i < depth; i++) indent.append("  "); // 缩进，体现层级
+        for (int i = 0; i < depth; i++) indent.append("  ");
 
         String viewName = view.getClass().getSimpleName();
         String idName = "NO_ID";
         try {
             int id = view.getId();
             if (id != View.NO_ID) {
-                // 把数字 ID 转换成真正的名字，比如 settings_button
                 idName = view.getResources().getResourceEntryName(id);
             }
         } catch (Throwable ignored) {}
 
-        // 带有 [UI树] 标签，方便你在日志里搜索
         Log.d(TAG, "[UI树] " + indent + "-> " + viewName + " (id: " + idName + ")");
 
         if (view instanceof ViewGroup) {
             ViewGroup group = (ViewGroup) view;
             for (int i = 0; i < group.getChildCount(); i++) {
-                dumpViewHierarchy(group.getChildAt(i), depth + 1); // 深入下一层
+                dumpViewHierarchy(group.getChildAt(i), depth + 1);
             }
         }
     }
