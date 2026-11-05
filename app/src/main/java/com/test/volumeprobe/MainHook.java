@@ -4,7 +4,6 @@ import android.util.Log;
 import io.github.libxposed.api.XposedModule;
 import io.github.libxposed.api.XposedInterface;
 import io.github.libxposed.api.XposedModuleInterface;
-import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 
 public class MainHook extends XposedModule {
@@ -21,72 +20,53 @@ public class MainHook extends XposedModule {
         super.onPackageReady(param);
         if (!param.getPackageName().equals("com.android.systemui")) return;
 
-        log(Log.INFO, TAG, "=== 准备拦截音量组件的构造函数 ===");
+        log(Log.INFO, TAG, "=== 准备拦截真正的音量面板 ===");
 
         try {
             ClassLoader cl = param.getDefaultClassLoader();
             
-            // 我们要找的两个核心类
-            String[] targetClasses = {
-                "com.android.systemui.volume.VolumeUI",
-                "com.android.systemui.volume.VolumeDialogComponent"
-            };
+            // 🌟 就是你截图里发现的真神！
+            String targetClassName = "com.android.systemui.volume.dialog.VolumeDialog";
+            
+            Class<?> clazz = cl.loadClass(targetClassName);
+            log(Log.INFO, TAG, "✅ 成功找到类: " + targetClassName);
 
-            for (String className : targetClasses) {
-                try {
-                    Class<?> clazz = cl.loadClass(className);
-                    // 拦截所有构造函数 <init>
-                    for (Method method : clazz.getDeclaredMethods()) {
-                        if (method.isConstructor()) {
-                            hook(method).intercept(new ConstructorInspectHooker(className));
-                            log(Log.INFO, TAG, "== 成功拦截构造函数: " + className + " ==");
-                        }
-                    }
-                } catch (Throwable ignored) {}
+            int count = 0;
+            // 遍历它的所有方法，看看它到底有哪些显示/隐藏的方法
+            for (Method method : clazz.getDeclaredMethods()) {
+                String methodName = method.getName();
+                
+                // 通常音量面板的显示方法叫 show 或者 showH
+                if (methodName.equals("show") || methodName.equals("showH")) {
+                    hook(method).intercept(new DialogHooker(methodName));
+                    log(Log.INFO, TAG, "== 成功挂载方法: " + methodName + " ==");
+                    count++;
+                }
             }
+            
+            if (count == 0) {
+                // 如果没找到 show，我们就把所有方法名打印出来看看
+                log(Log.DEBUG, TAG, "没找到 show 方法，这个类的方法有:");
+                for (Method m : clazz.getDeclaredMethods()) {
+                    log(Log.DEBUG, TAG, "  -> " + m.getName());
+                }
+            }
+
         } catch (Throwable t) {
             log(Log.ERROR, TAG, "挂载异常: " + t);
         }
     }
 
-    private static class ConstructorInspectHooker implements XposedInterface.Hooker {
-        private final String className;
-        
-        public ConstructorInspectHooker(String className) {
-            this.className = className;
-        }
+    private static class DialogHooker implements XposedInterface.Hooker {
+        private final String methodName;
+        public DialogHooker(String methodName) { this.methodName = methodName; }
 
         @Override
         public Object intercept(XposedInterface.Chain chain) throws Throwable {
-            // 1. 放行构造函数，让对象正常创建
-            Object result = chain.proceed();
+            Log.d(TAG, "🔥【UI探针】音量面板被呼出了！方法: " + methodName);
             
-            // 2. 获取刚刚创建出来的对象实例
-            Object instance = chain.getThisObject();
-            if (instance == null) return result;
-
-            Log.d(TAG, "【查户口】发现实例创建完成: " + className);
-
-            // 3. 暴力遍历它里面的所有成员变量 (Field)
-            Class<?> clazz = instance.getClass();
-            while (clazz != null && !clazz.equals(Object.class)) {
-                for (Field field : clazz.getDeclaredFields()) {
-                    try {
-                        field.setAccessible(true);
-                        Object value = field.get(instance);
-                        
-                        if (value != null) {
-                            String typeName = value.getClass().getName();
-                            // 过滤出名字包含 volume 或 dialog 的变量，这些很可能就是控制面板的实例
-                            if (typeName.toLowerCase().contains("volume") || typeName.toLowerCase().contains("dialog")) {
-                                Log.d(TAG, "  🎯【发现目标】变量名: " + field.getName() + " | 类型: " + typeName);
-                            }
-                        }
-                    } catch (Throwable ignored) {}
-                }
-                clazz = clazz.getSuperclass();
-            }
-            return result;
+            // 这里我们不修改任何东西，直接放行
+            return chain.proceed();
         }
     }
 
