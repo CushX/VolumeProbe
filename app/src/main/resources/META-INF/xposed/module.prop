@@ -1,7 +1,7 @@
 minApiVersion=101
 targetApiVersion=102
 autoHotReload=true
-staticScope=false
+staticScope=true
 name=音量探针V2
 description=API 102 测试
 author=Me
