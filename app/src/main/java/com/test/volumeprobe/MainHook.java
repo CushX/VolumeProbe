@@ -20,7 +20,6 @@ public class MainHook extends XposedModule {
         super.onSystemServerStarting(param);
     }
 
-    // 🌟 关键修改：将 onPackageLoaded 替换为 onPackageReady
     @Override
     public void onPackageReady(XposedModuleInterface.PackageReadyParam param) {
         super.onPackageReady(param);
@@ -32,36 +31,72 @@ public class MainHook extends XposedModule {
 
         log(Log.INFO, TAG, "=== 探针成功潜入系统 UI 进程 ===");
 
-        try {
-            // 使用 getDefaultClassLoader() 获取类加载器
-            Class<?> volumeDialogClass = param.getDefaultClassLoader().loadClass("com.android.systemui.volume.VolumeDialogImpl");
-            
-            int hookedCount = 0;
-            for (Method method : volumeDialogClass.getDeclaredMethods()) {
-                String methodName = method.getName();
-                if (methodName.equals("showH") || methodName.equals("show")) {
-                    hook(method).intercept(new DialogShowHooker(methodName));
-                    log(Log.INFO, TAG, "== 成功挂载音量面板方法: " + methodName + " ==");
-                    hookedCount++;
-                }
-            }
-            
-            if (hookedCount == 0) {
-                log(Log.ERROR, TAG, "== 没有找到 show 方法，可能类名或方法被混淆 ==");
-            }
+        // 候选类名列表
+        String[] candidateClasses = {
+            "com.android.systemui.volume.VolumeDialogImpl",
+            "com.android.systemui.volume.VolumePanel",
+            "com.android.systemui.volume.VolumeUI",
+            "com.android.systemui.volume.VolumeDialog",
+            "com.android.systemui.volume.VolumeDialogComponent"
+        };
 
-        } catch (Throwable t) {
-            log(Log.ERROR, TAG, "== SystemUI 探针挂载失败 (可能类名变了): " + t + " ==");
+        ClassLoader classLoader = param.getDefaultClassLoader();
+        boolean foundAny = false;
+
+        for (String className : candidateClasses) {
+            try {
+                Class<?> clazz = findClassIfExists(className, classLoader);
+                if (clazz == null) {
+                    log(Log.DEBUG, TAG, "未找到类: " + className);
+                    continue;
+                }
+                
+                foundAny = true;
+                log(Log.INFO, TAG, "✅ 找到类: " + className);
+                
+                int hookedCount = 0;
+                for (Method method : clazz.getDeclaredMethods()) {
+                    String methodName = method.getName();
+                    if (methodName.equals("show") || methodName.equals("showH") || 
+                        methodName.equals("initPanel") || methodName.equals("start")) {
+                        hook(method).intercept(new DialogShowHooker(className, methodName));
+                        log(Log.INFO, TAG, "  -> 成功挂载方法: " + methodName);
+                        hookedCount++;
+                    }
+                }
+                if (hookedCount == 0) {
+                    log(Log.DEBUG, TAG, "  -> 类 " + className + " 中没有找到 show/initPanel/start 方法");
+                }
+
+            } catch (Throwable t) {
+                log(Log.ERROR, TAG, "探测 " + className + " 时发生异常: " + t);
+            }
+        }
+
+        if (!foundAny) {
+            log(Log.ERROR, TAG, "❌ 所有候选类均未找到，音量面板可能被深度混淆或重构。");
+        }
+    }
+
+    private Class<?> findClassIfExists(String className, ClassLoader classLoader) {
+        try {
+            return classLoader.loadClass(className);
+        } catch (ClassNotFoundException e) {
+            return null;
         }
     }
 
     private static class DialogShowHooker implements XposedInterface.Hooker {
-        private final String name;
-        public DialogShowHooker(String name) { this.name = name; }
+        private final String className;
+        private final String methodName;
+        public DialogShowHooker(String className, String methodName) {
+            this.className = className;
+            this.methodName = methodName;
+        }
 
         @Override
         public Object intercept(XposedInterface.Chain chain) throws Throwable {
-            Log.d(TAG, "【UI探针】系统音量面板被呼出了！触发方法: " + name);
+            Log.d(TAG, "【UI探针】音量面板被呼出！类: " + className + " 方法: " + methodName);
             return chain.proceed();
         }
     }
