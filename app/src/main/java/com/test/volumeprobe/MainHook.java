@@ -25,16 +25,19 @@ public class MainHook extends XposedModule {
         super.onPackageReady(param);
         if (!param.getPackageName().equals("com.android.systemui")) return;
 
+        log(Log.INFO, TAG, "=== 准备拦截真正的音量面板 ===");
+
         try {
             ClassLoader cl = param.getDefaultClassLoader();
             String targetClassName = "com.android.systemui.volume.dialog.VolumeDialog";
             Class<?> clazz = cl.loadClass(targetClassName);
-            
-            // 这次我们挂载 onCreate，因为布局是在这里初始化的
+            log(Log.INFO, TAG, "✅ 成功找到类: " + targetClassName);
+
+            // 🌟 这次我们只盯准 onCreate，因为界面的根容器是在这里加载的
             for (Method method : clazz.getDeclaredMethods()) {
                 if (method.getName().equals("onCreate")) {
                     hook(method).intercept(new UIInjectorHooker());
-                    log(Log.INFO, TAG, "== 成功挂载 onCreate 方法 ==");
+                    log(Log.INFO, TAG, "== 成功挂载 onCreate 方法，准备注入 UI ==");
                 }
             }
         } catch (Throwable t) {
@@ -45,42 +48,44 @@ public class MainHook extends XposedModule {
     private static class UIInjectorHooker implements XposedInterface.Hooker {
         @Override
         public Object intercept(XposedInterface.Chain chain) throws Throwable {
-            // 1. 先让原生面板正常加载完 XML 布局
+            // 1. 先让原生的 onCreate 跑完，保证原来的音量面板已经画好
             Object result = chain.proceed();
             
             try {
                 Object dialogInstance = chain.getThisObject(); 
                 if (dialogInstance == null) return result;
 
-                // 2. 使用反射调用 requireViewById(0x7f0a09cc) 获取那个核心容器
-                // 注意：在代码里，0x7f0a09cc 是一个整数
+                // 2. 用反射调用 requireViewById(0x7f0a09cc) 拿到那个装音量条的白色卡片
                 Method requireViewByIdMethod = dialogInstance.getClass().getMethod("requireViewById", int.class);
                 Object containerView = requireViewByIdMethod.invoke(dialogInstance, 0x7f0a09cc);
                 
                 if (!(containerView instanceof ViewGroup)) {
-                    Log.e(TAG, "获取到的容器不是 ViewGroup");
+                    Log.e(TAG, "获取到的容器不是 ViewGroup，无法注入");
                     return result;
                 }
 
                 ViewGroup rootContainer = (ViewGroup) containerView;
                 Context context = rootContainer.getContext();
 
-                // 3. 创建我们要的按钮
+                // 3. 创建一个超显眼的红色按钮用来测试
                 TextView myButton = new TextView(context);
-                myButton.setText("分应用面板");
+                myButton.setText("⚙️ 分应用面板");
                 myButton.setTextColor(Color.WHITE);
                 myButton.setBackgroundColor(Color.RED);
-                myButton.setTextSize(14);
+                myButton.setTextSize(16);
+                myButton.setGravity(android.view.Gravity.CENTER);
                 
-                int pad = (int) (16 * context.getResources().getDisplayMetrics().density);
+                // 设置一点点内边距
+                int pad = (int) (12 * context.getResources().getDisplayMetrics().density);
                 myButton.setPadding(pad, pad, pad, pad);
 
-                // 4. 把按钮塞进这个白色卡片里！
+                // 4. 暴力塞进卡片里！
                 rootContainer.addView(myButton);
 
                 Log.d(TAG, "🔥【注入成功】测试按钮已经塞进音量卡片！");
                 
             } catch (Throwable t) {
+                // 就算注入失败，也绝对不能抛出异常，否则 SystemUI 会崩溃
                 Log.e(TAG, "注入 UI 失败: " + t);
             }
 
