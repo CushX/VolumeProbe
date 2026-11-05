@@ -4,6 +4,7 @@ import android.util.Log;
 import io.github.libxposed.api.XposedModule;
 import io.github.libxposed.api.XposedInterface;
 import io.github.libxposed.api.XposedModuleInterface;
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 
 public class MainHook extends XposedModule {
@@ -16,88 +17,60 @@ public class MainHook extends XposedModule {
     }
 
     @Override
-    public void onSystemServerStarting(XposedModuleInterface.SystemServerStartingParam param) {
-        super.onSystemServerStarting(param);
-    }
-
-    @Override
     public void onPackageReady(XposedModuleInterface.PackageReadyParam param) {
         super.onPackageReady(param);
-        String pkgName = param.getPackageName();
-        
-        if (!pkgName.equals("com.android.systemui")) {
-            return;
-        }
+        if (!param.getPackageName().equals("com.android.systemui")) return;
 
-        log(Log.INFO, TAG, "=== 探针成功潜入系统 UI 进程 ===");
+        log(Log.INFO, TAG, "=== 探针潜入系统 UI 进程，准备查户口 ===");
 
-        // 候选类名列表
-        String[] candidateClasses = {
-            "com.android.systemui.volume.VolumeDialogImpl",
-            "com.android.systemui.volume.VolumePanel",
-            "com.android.systemui.volume.VolumeUI",
-            "com.android.systemui.volume.VolumeDialog",
-            "com.android.systemui.volume.VolumeDialogComponent"
-        };
-
-        ClassLoader classLoader = param.getDefaultClassLoader();
-        boolean foundAny = false;
-
-        for (String className : candidateClasses) {
-            try {
-                Class<?> clazz = findClassIfExists(className, classLoader);
-                if (clazz == null) {
-                    log(Log.DEBUG, TAG, "未找到类: " + className);
-                    continue;
-                }
-                
-                foundAny = true;
-                log(Log.INFO, TAG, "✅ 找到类: " + className);
-                
-                int hookedCount = 0;
-                for (Method method : clazz.getDeclaredMethods()) {
-                    String methodName = method.getName();
-                    if (methodName.equals("show") || methodName.equals("showH") || 
-                        methodName.equals("initPanel") || methodName.equals("start")) {
-                        hook(method).intercept(new DialogShowHooker(className, methodName));
-                        log(Log.INFO, TAG, "  -> 成功挂载方法: " + methodName);
-                        hookedCount++;
-                    }
-                }
-                if (hookedCount == 0) {
-                    log(Log.DEBUG, TAG, "  -> 类 " + className + " 中没有找到 show/initPanel/start 方法");
-                }
-
-            } catch (Throwable t) {
-                log(Log.ERROR, TAG, "探测 " + className + " 时发生异常: " + t);
-            }
-        }
-
-        if (!foundAny) {
-            log(Log.ERROR, TAG, "❌ 所有候选类均未找到，音量面板可能被深度混淆或重构。");
-        }
-    }
-
-    private Class<?> findClassIfExists(String className, ClassLoader classLoader) {
         try {
-            return classLoader.loadClass(className);
-        } catch (ClassNotFoundException e) {
-            return null;
+            // 我们已经确认这个类存在
+            Class<?> volumeUIClass = param.getDefaultClassLoader().loadClass("com.android.systemui.volume.VolumeUI");
+
+            // Hook 它的 start 方法 (不加 before/after 注解，直接在 intercept 里控制)
+            for (Method method : volumeUIClass.getDeclaredMethods()) {
+                if (method.getName().equals("start")) {
+                    hook(method).intercept(new StartAndInspectHooker());
+                    log(Log.INFO, TAG, "== 成功挂载 VolumeUI.start()，等待开机触发 ==");
+                }
+            }
+        } catch (Throwable t) {
+            log(Log.ERROR, TAG, "挂载异常: " + t);
         }
     }
 
-    private static class DialogShowHooker implements XposedInterface.Hooker {
-        private final String className;
-        private final String methodName;
-        public DialogShowHooker(String className, String methodName) {
-            this.className = className;
-            this.methodName = methodName;
-        }
-
+    private static class StartAndInspectHooker implements XposedInterface.Hooker {
         @Override
         public Object intercept(XposedInterface.Chain chain) throws Throwable {
-            Log.d(TAG, "【UI探针】音量面板被呼出！类: " + className + " 方法: " + methodName);
-            return chain.proceed();
+            // 1. 先让系统正常执行 start()
+            Object result = chain.proceed();
+            
+            // 2. 拿到 VolumeUI 的当前实例
+            Object volumeUIInstance = chain.getThisObject();
+            if (volumeUIInstance == null) return result;
+
+            Log.d(TAG, "【查户口】开始扫描 VolumeUI 内部的成员变量...");
+
+            // 3. 暴力反射，遍历这个实例里的所有字段
+            Class<?> clazz = volumeUIInstance.getClass();
+            while (clazz != null && !clazz.equals(Object.class)) {
+                for (Field field : clazz.getDeclaredFields()) {
+                    try {
+                        field.setAccessible(true);
+                        Object value = field.get(volumeUIInstance);
+                        if (value != null) {
+                            String typeName = value.getClass().getName();
+                            // 只要这个变量的类型名字里包含 volume 或者 dialog，大概率就是我们要找的面板
+                            if (typeName.toLowerCase().contains("volume") || typeName.toLowerCase().contains("dialog")) {
+                                Log.d(TAG, "【发现目标】变量名: " + field.getName() + " | 类型: " + typeName);
+                            }
+                        }
+                    } catch (Throwable ignored) {}
+                }
+                clazz = clazz.getSuperclass();
+            }
+            
+            return result;
         }
     }
 
