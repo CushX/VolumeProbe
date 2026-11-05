@@ -18,47 +18,48 @@ public class MainHook extends XposedModule {
     @Override
     public void onSystemServerStarting(XposedModuleInterface.SystemServerStartingParam param) {
         super.onSystemServerStarting(param);
-        log(Log.INFO, TAG, "=== 准备 Hook AudioService (API 102) ===");
+        log(Log.INFO, TAG, "=== 开启【天罗地网】全量 Hook 模式 ===");
         try {
             Class<?> audioServiceClass = param.getClassLoader().loadClass("com.android.server.audio.AudioService");
-
-            // 第一道门：setStreamVolume (通常拖拽滑块触发)
-            Method setStreamVolumeMethod = audioServiceClass.getDeclaredMethod(
-                    "setStreamVolume", int.class, int.class, int.class, String.class);
-            hook(setStreamVolumeMethod).intercept(new SetStreamVolumeHooker());
-            log(Log.INFO, TAG, "=== setStreamVolume Hook 安装成功 ===");
-
-            // 第二道门：adjustStreamVolume (通常按音量键触发)
-            Method adjustStreamVolumeMethod = audioServiceClass.getDeclaredMethod(
-                    "adjustStreamVolume", int.class, int.class, int.class, String.class);
-            hook(adjustStreamVolumeMethod).intercept(new AdjustStreamVolumeHooker());
-            log(Log.INFO, TAG, "=== adjustStreamVolume Hook 安装成功 ===");
-
+            int count = 0;
+            
+            // 遍历 AudioService 里的所有方法
+            for (Method method : audioServiceClass.getDeclaredMethods()) {
+                String methodName = method.getName();
+                // 只要方法名包含 Volume，统统 Hook 住！
+                if (methodName.contains("Volume")) {
+                    try {
+                        hook(method).intercept(new UniversalVolumeHooker(methodName));
+                        count++;
+                        log(Log.INFO, TAG, "== 成功挂载方法: " + methodName + " ==");
+                    } catch (Throwable t) {
+                        log(Log.ERROR, TAG, "挂载 " + methodName + " 失败: " + t);
+                    }
+                }
+            }
+            log(Log.INFO, TAG, "=== 天罗地网部署完毕，共挂了 " + count + " 个方法 ===");
         } catch (Throwable t) {
-            log(Log.ERROR, TAG, "Hook 失败: " + t.toString());
+            log(Log.ERROR, TAG, "核心异常: " + t.toString());
         }
     }
 
-    // 监听拖拽
-    private static class SetStreamVolumeHooker implements XposedInterface.Hooker {
-        @Override
-        public Object intercept(XposedInterface.Chain chain) throws Throwable {
-            int streamType = (int) chain.getArg(0);
-            int index = (int) chain.getArg(1);
-            // 不限制类型，全部打印！看看到底走的什么流
-            Log.d(TAG, "【拦截 set】流类型: " + streamType + ", 目标值: " + index);
-            return chain.proceed();
-        }
-    }
+    // 万能拦截器
+    private static class UniversalVolumeHooker implements XposedInterface.Hooker {
+        private final String methodName;
 
-    // 监听按键
-    private static class AdjustStreamVolumeHooker implements XposedInterface.Hooker {
+        public UniversalVolumeHooker(String methodName) {
+            this.methodName = methodName;
+        }
+
         @Override
         public Object intercept(XposedInterface.Chain chain) throws Throwable {
-            int streamType = (int) chain.getArg(0);
-            int direction = (int) chain.getArg(1);
-            // 不限制类型，全部打印！
-            Log.d(TAG, "【拦截 adjust】流类型: " + streamType + ", 方向: " + direction);
+            // 把当前执行的方法名和参数全打印出来
+            StringBuilder sb = new StringBuilder("【捕获】方法: " + methodName + " | 参数: ");
+            for (Object arg : chain.getArgs()) {
+                sb.append(arg).append(", ");
+            }
+            Log.d(TAG, sb.toString());
+            
             return chain.proceed();
         }
     }
