@@ -5,8 +5,8 @@ import io.github.libxposed.api.XposedModule;
 import io.github.libxposed.api.XposedInterface;
 import io.github.libxposed.api.ModuleLoadedParam;
 import io.github.libxposed.api.SystemServerStartingParam;
-import io.github.libxposed.api.annotations.BeforeInvoke;
-import io.github.libxposed.api.annotations.XposedHooker;
+import androidx.annotation.NonNull;
+import java.lang.reflect.Method;
 
 public class MainHook extends XposedModule {
     private static final String TAG = "VolumeProbe";
@@ -27,10 +27,12 @@ public class MainHook extends XposedModule {
         log("=== 准备 Hook AudioService (API 102) ===");
         try {
             Class<?> audioServiceClass = param.getClassLoader().loadClass("com.android.server.audio.AudioService");
+            Method setStreamVolumeMethod = audioServiceClass.getDeclaredMethod(
+                    "setStreamVolume", int.class, int.class, int.class, String.class
+            );
             
-            this.hook(audioServiceClass, "setStreamVolume", 
-                new Class[]{int.class, int.class, int.class, String.class}, 
-                SetStreamVolumeHooker.class);
+            // API 102 使用链式调用: hook(method).intercept(hooker)
+            hook(setStreamVolumeMethod).intercept(new SetStreamVolumeHooker());
                 
             log("=== setStreamVolume Hook 安装成功 ===");
         } catch (Throwable t) {
@@ -38,16 +40,19 @@ public class MainHook extends XposedModule {
         }
     }
 
-    @XposedHooker
-    public static class SetStreamVolumeHooker implements XposedInterface.Hooker {
-        @BeforeInvoke
-        public static void before(XposedInterface.HookParam param) {
-            Object[] args = param.getArgs();
+    private static class SetStreamVolumeHooker implements XposedInterface.Hooker {
+        @Override
+        public Object intercept(@NonNull XposedInterface.Chain chain) throws Throwable {
+            Object[] args = chain.getArgs().toArray();
             int streamType = (int) args[0];
             int index = (int) args[1];
-            if (streamType == 3) {
+            
+            if (streamType == 3) { // STREAM_MUSIC
                 Log.d(TAG, "【拦截成功】滑动媒体音量，目标值: " + index);
             }
+            
+            // 放行，继续执行系统的原始逻辑
+            return chain.proceed();
         }
     }
 }
