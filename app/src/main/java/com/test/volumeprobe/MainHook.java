@@ -5,11 +5,10 @@ import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
 import android.util.Log;
 import android.view.Gravity;
-import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.FrameLayout;
 import android.widget.ImageView;
+import android.widget.LinearLayout;
 import io.github.libxposed.api.XposedModule;
 import io.github.libxposed.api.XposedInterface;
 import io.github.libxposed.api.XposedModuleInterface;
@@ -57,18 +56,16 @@ public class MainHook extends XposedModule {
                 if (!(decorView instanceof ViewGroup)) return result;
                 ViewGroup rootContainer = (ViewGroup) decorView;
 
-                // 🌟 拿最外层的白色面板容器
-                int dialogRootId = context.getResources().getIdentifier("volume_dialog", "id", "com.android.systemui");
-                // 🌟 拿原生静音按钮，作为位置参考
-                int muteBtnId = context.getResources().getIdentifier("volume_dialog_top_section_container", "id", "com.android.systemui");
-
-                if (dialogRootId != 0 && muteBtnId != 0) {
-                    View dialogRoot = rootContainer.findViewById(dialogRootId);
-                    View muteContainer = rootContainer.findViewById(muteBtnId);
+                // 🌟 直接找底部容器（它是一个最稳定的 LinearLayout）
+                int bottomContainerId = context.getResources().getIdentifier("volume_dialog_bottom_section_container", "id", "com.android.systemui");
+                
+                if (bottomContainerId != 0) {
+                    View bottomContainer = rootContainer.findViewById(bottomContainerId);
                     
-                    if (dialogRoot instanceof ViewGroup && muteContainer != null) {
-                        ViewGroup parent = (ViewGroup) dialogRoot;
+                    if (bottomContainer instanceof LinearLayout) {
+                        LinearLayout parent = (LinearLayout) bottomContainer;
                         
+                        // 防止重复添加
                         if (parent.findViewWithTag(TAG_BUTTON) != null) return result; 
 
                         // 创建图标
@@ -78,20 +75,24 @@ public class MainHook extends XposedModule {
                         myButton.setColorFilter(Color.parseColor("#6750A4")); 
                         myButton.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
                         
-                        // 圆形背景，防止点击穿透
+                        // 浅紫色圆形背景
                         GradientDrawable shape = new GradientDrawable();
                         shape.setShape(GradientDrawable.OVAL);
                         shape.setColor(Color.parseColor("#EADDFF"));
                         myButton.setBackground(shape);
-                        
-                        // 🌟 暴力防穿透：拦截所有触摸事件，让系统认为这里有一堵墙
-                        myButton.setOnTouchListener((v, event) -> {
-                            if (event.getAction() == MotionEvent.ACTION_UP) {
-                                v.performClick();
-                            }
-                            return true; // 吃掉所有事件，绝不传出去
-                        });
 
+                        // 设置宽高，比如 36dp x 36dp
+                        int btnSize = (int) (36 * context.getResources().getDisplayMetrics().density);
+                        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(btnSize, btnSize);
+                        
+                        // 关键：让它水平居中，并且加一点上下边距
+                        lp.gravity = Gravity.CENTER_HORIZONTAL;
+                        lp.topMargin = (int) (8 * context.getResources().getDisplayMetrics().density);
+                        lp.bottomMargin = (int) (4 * context.getResources().getDisplayMetrics().density);
+                        
+                        myButton.setLayoutParams(lp);
+
+                        // 点击事件
                         myButton.setOnClickListener(v -> {
                             Log.d(TAG, "👆 点击了分应用图标！");
                             try {
@@ -100,30 +101,10 @@ public class MainHook extends XposedModule {
                             PanelUI.show(context);
                         });
 
-                        // 🌟 手动定位：找静音按钮底部的位置
-                        // 获取静音容器底部的 Y 坐标
-                        int muteBottomY = muteContainer.getBottom();
+                        // 🌟 直接加到索引 0 的位置，也就是把原生的齿轮/字幕按钮往下挤
+                        parent.addView(myButton, 0);
                         
-                        // 使用绝对布局参数放进去
-                        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
-                                (int) (36 * context.getResources().getDisplayMetrics().density), 
-                                (int) (36 * context.getResources().getDisplayMetrics().density)
-                        );
-                        
-                        // 居中，并在静音键正下方
-                        lp.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
-                        
-                        // 因为在垂直面板中，muteContainer 往往是在最顶部。
-                        // 我们可以通过 marginTop 把它往下推。先设定一个基础值，如果位置不对，可以微调这里
-                        lp.topMargin = (int) (80 * context.getResources().getDisplayMetrics().density); 
-                        
-                        myButton.setLayoutParams(lp);
-
-                        // 确保它被加到最顶层
-                        parent.addView(myButton);
-                        parent.bringChildToFront(myButton);
-                        
-                        Log.d(TAG, "🔥【注入成功】带防穿透功能的图标已悬浮！");
+                        Log.d(TAG, "🔥【注入成功】图标已稳稳塞入底部容器最上方！");
                     }
                 }
             } catch (Throwable t) {
