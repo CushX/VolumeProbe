@@ -1,11 +1,11 @@
 package com.test.volumeprobe;
 
-import android.app.AlertDialog;
 import android.content.Context;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.PixelFormat;
 import android.graphics.drawable.Drawable;
 import android.media.AudioManager;
 import android.media.AudioPlaybackConfiguration;
@@ -14,6 +14,7 @@ import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.WindowManager;
 import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -32,12 +33,20 @@ public class PanelUI {
         AudioManager audioManager = (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
         if (audioManager == null) return;
 
+        WindowManager windowManager = (WindowManager) context.getSystemService(Context.WINDOW_SERVICE);
+        if (windowManager == null) return;
+
         int screenWidth = context.getResources().getDisplayMetrics().widthPixels;
         int maxPanelWidth = (int) (screenWidth * 0.5f);
 
         MaxWidthLinearLayout mainLayout = new MaxWidthLinearLayout(context, maxPanelWidth);
         mainLayout.setOrientation(LinearLayout.VERTICAL);
-        mainLayout.setBackgroundColor(Color.WHITE);
+        
+        android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable();
+        bg.setColor(Color.WHITE);
+        bg.setCornerRadius(30);
+        mainLayout.setBackground(bg);
+        
         int pad = (int) (16 * context.getResources().getDisplayMetrics().density);
         mainLayout.setPadding(pad, pad, pad, pad);
 
@@ -59,7 +68,6 @@ public class PanelUI {
         int maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
         int curVol = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC);
 
-        // 最左侧：系统总音量
         trackLayout.addView(createVolumeColumn(
                 context, "系统总音量", null, curVol, maxVol, true, (progress) -> {
                     audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, progress, 0);
@@ -75,25 +83,20 @@ public class PanelUI {
         divider.setLayoutParams(dividerLp);
         trackLayout.addView(divider);
 
-        // 右侧：活跃应用
         try {
             List<AudioPlaybackConfiguration> configs = audioManager.getActivePlaybackConfigurations();
             Set<Integer> activeUids = new HashSet<>();
             
-            // 🌟 使用反射获取隐藏 API
             for (AudioPlaybackConfiguration config : configs) {
                 try {
                     Method isActiveMethod = config.getClass().getMethod("isActive");
                     Method getClientUidMethod = config.getClass().getMethod("getClientUid");
-                    
                     boolean isActive = (boolean) isActiveMethod.invoke(config);
                     if (isActive) {
                         int uid = (int) getClientUidMethod.invoke(config);
                         activeUids.add(uid);
                     }
-                } catch (Throwable t) {
-                    Log.e(TAG, "反射获取音频配置失败: " + t);
-                }
+                } catch (Throwable t) {}
             }
 
             PackageManager pm = context.getPackageManager();
@@ -107,13 +110,11 @@ public class PanelUI {
                         ApplicationInfo appInfo = pm.getApplicationInfo(pkgName, 0);
                         String appName = pm.getApplicationLabel(appInfo).toString();
                         Drawable icon = pm.getApplicationIcon(appInfo);
-
                         int appVol = VolumeData.getVolume(pkgName, curVol);
                         
                         trackLayout.addView(createVolumeColumn(
                                 context, appName, icon, appVol, maxVol, false, (progress) -> {
                                     VolumeData.setVolume(pkgName, progress);
-                                    Log.d(TAG, "记录 " + appName + " 音量: " + progress);
                                 }
                         ));
                     } catch (PackageManager.NameNotFoundException ignored) {}
@@ -126,16 +127,26 @@ public class PanelUI {
         scrollView.addView(trackLayout);
         mainLayout.addView(scrollView);
 
-        AlertDialog.Builder builder = new AlertDialog.Builder(context, android.R.style.Theme_DeviceDefault_Dialog_Alert);
-        builder.setView(mainLayout);
-        AlertDialog dialog = builder.create();
+        WindowManager.LayoutParams params = new WindowManager.LayoutParams();
+        params.width = WindowManager.LayoutParams.WRAP_CONTENT;
+        params.height = WindowManager.LayoutParams.WRAP_CONTENT;
+        params.type = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY;
+        params.format = PixelFormat.TRANSLUCENT;
+        params.gravity = Gravity.CENTER;
+        params.flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
 
-        if (dialog.getWindow() != null) {
-            dialog.getWindow().setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(Color.TRANSPARENT));
-            dialog.getWindow().setLayout(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        mainLayout.setOnClickListener(v -> {
+            try {
+                windowManager.removeView(mainLayout);
+            } catch (Throwable ignored) {}
+        });
+
+        try {
+            windowManager.addView(mainLayout, params);
+            Log.d(TAG, "🔥 自定义面板已通过 WindowManager 成功弹出！");
+        } catch (Throwable t) {
+            Log.e(TAG, "❌ WindowManager 弹窗失败: " + t);
         }
-
-        dialog.show();
     }
 
     private static View createVolumeColumn(Context context, String title, Drawable icon, int progress, int max, boolean isSystem, java.util.function.Consumer<Integer> onProgressChanged) {
@@ -199,12 +210,10 @@ public class PanelUI {
 
     public static class MaxWidthLinearLayout extends LinearLayout {
         private int maxWidth;
-
         public MaxWidthLinearLayout(Context context, int maxWidth) {
             super(context);
             this.maxWidth = maxWidth;
         }
-
         @Override
         protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
             int widthMode = MeasureSpec.getMode(widthMeasureSpec);
@@ -220,28 +229,23 @@ public class PanelUI {
         public VerticalSeekBar(Context context) {
             super(context);
         }
-
         @Override
         protected synchronized void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
             super.onMeasure(heightMeasureSpec, widthMeasureSpec);
             setMeasuredDimension(getMeasuredHeight(), getMeasuredWidth());
         }
-
         @Override
         protected void onDraw(Canvas c) {
             c.rotate(-90);
             c.translate(-getHeight(), 0);
             super.onDraw(c);
         }
-
         private OnSeekBarChangeListener mOnSeekBarChangeListener;
-
         @Override
         public void setOnSeekBarChangeListener(OnSeekBarChangeListener l) {
             super.setOnSeekBarChangeListener(l);
             mOnSeekBarChangeListener = l;
         }
-
         @Override
         public boolean onTouchEvent(MotionEvent event) {
             if (!isEnabled()) return false;
