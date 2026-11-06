@@ -2,23 +2,19 @@ package com.test.volumeprobe;
 
 import android.content.Context;
 import android.graphics.Color;
-import android.graphics.PixelFormat;
 import android.graphics.drawable.GradientDrawable;
-import android.os.Handler;
-import android.os.Looper;
 import android.util.Log;
 import android.view.Gravity;
-import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
-import android.view.WindowManager;
 import android.widget.ImageButton;
 import android.widget.LinearLayout;
-import android.widget.TextView;
 import io.github.libxposed.api.XposedModule;
 import io.github.libxposed.api.XposedInterface;
 import io.github.libxposed.api.XposedModuleInterface;
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.Collection;
 
 public class MainHook extends XposedModule {
     private static final String TAG = "VolumeProbe";
@@ -62,112 +58,99 @@ public class MainHook extends XposedModule {
                 if (!(decorView instanceof ViewGroup)) return result;
                 ViewGroup rootContainer = (ViewGroup) decorView;
 
+                // 1. 找容器并注入按钮
                 int bottomContainerId = context.getResources().getIdentifier("volume_dialog_bottom_section_container", "id", "com.android.systemui");
+                if (bottomContainerId == 0) return result;
                 
-                if (bottomContainerId != 0) {
-                    View bottomContainer = rootContainer.findViewById(bottomContainerId);
+                View bottomContainer = rootContainer.findViewById(bottomContainerId);
+                if (!(bottomContainer instanceof LinearLayout)) return result;
+                
+                LinearLayout parent = (LinearLayout) bottomContainer;
+                if (parent.findViewWithTag(TAG_BUTTON) != null) return result; 
+
+                ImageButton myButton = new ImageButton(context);
+                myButton.setTag(TAG_BUTTON); 
+                myButton.setImageResource(android.R.drawable.ic_menu_manage);
+                myButton.setColorFilter(Color.parseColor("#6750A4")); 
+                myButton.setScaleType(android.widget.ImageView.ScaleType.CENTER_INSIDE);
+                
+                GradientDrawable shape = new GradientDrawable();
+                shape.setShape(GradientDrawable.OVAL);
+                shape.setColor(Color.parseColor("#EADDFF"));
+                myButton.setBackground(shape);
+
+                int btnSize = (int) (36 * context.getResources().getDisplayMetrics().density);
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(btnSize, btnSize);
+                lp.gravity = Gravity.CENTER_HORIZONTAL;
+                lp.topMargin = (int) (8 * context.getResources().getDisplayMetrics().density);
+                lp.bottomMargin = (int) (4 * context.getResources().getDisplayMetrics().density);
+                myButton.setLayoutParams(lp);
+
+                myButton.setOnClickListener(v -> {
+                    Log.d(TAG, "👆 点击了分应用图标！");
+                    try {
+                        dialogInstance.getClass().getMethod("dismiss").invoke(dialogInstance);
+                    } catch (Throwable t) {}
+                    PanelUI.show(context);
+                });
+
+                parent.addView(myButton, 0);
+                Log.d(TAG, "🔥【注入成功】图标已塞入底部容器！");
+
+                // =========================================================
+                // 🌟 2. 终极杀招：把我们的按钮加进底层的触摸白名单集合！
+                // =========================================================
+                // 根据你发的 Smali 代码，白名单存放在 ViewModel 的 touchableBoundsViews 字段中
+                Object viewModel = findObjectByClassName(dialogInstance, "com.android.systemui.volume.dialog.ui.viewmodel.VolumeDialogViewModel");
+                
+                if (viewModel != null) {
+                    Field touchableBoundsViewsField = viewModel.getClass().getDeclaredField("touchableBoundsViews");
+                    touchableBoundsViewsField.setAccessible(true);
+                    Object collectionObj = touchableBoundsViewsField.get(viewModel);
                     
-                    if (bottomContainer instanceof LinearLayout) {
-                        LinearLayout parent = (LinearLayout) bottomContainer;
-                        if (parent.findViewWithTag(TAG_BUTTON) != null) return result; 
-
-                        ImageButton myButton = new ImageButton(context);
-                        myButton.setTag(TAG_BUTTON); 
-                        myButton.setImageResource(android.R.drawable.ic_menu_manage);
-                        myButton.setColorFilter(Color.parseColor("#6750A4")); 
-                        myButton.setScaleType(android.widget.ImageView.ScaleType.CENTER_INSIDE);
-                        
-                        GradientDrawable shape = new GradientDrawable();
-                        shape.setShape(GradientDrawable.OVAL);
-                        shape.setColor(Color.parseColor("#EADDFF"));
-                        myButton.setBackground(shape);
-
-                        int btnSize = (int) (36 * context.getResources().getDisplayMetrics().density);
-                        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(btnSize, btnSize);
-                        lp.gravity = Gravity.CENTER_HORIZONTAL;
-                        lp.topMargin = (int) (8 * context.getResources().getDisplayMetrics().density);
-                        lp.bottomMargin = (int) (4 * context.getResources().getDisplayMetrics().density);
-                        myButton.setLayoutParams(lp);
-
-                        // 🌟 探针 1：监控触摸事件
-                        myButton.setOnTouchListener((v, event) -> {
-                            if (event.getAction() == MotionEvent.ACTION_DOWN) {
-                                Log.d(TAG, "[触摸探针] 按下了图标！(ACTION_DOWN)");
-                                return true; 
-                            } else if (event.getAction() == MotionEvent.ACTION_UP) {
-                                Log.d(TAG, "[触摸探针] 松开了图标！(ACTION_UP)");
-                                v.performClick(); 
-                                return true;
-                            }
-                            return false;
-                        });
-
-                        // 🌟 探针 2：监控点击逻辑
-                        myButton.setOnClickListener(v -> {
-                            Log.d(TAG, "[点击探针] 成功进入 onClick 内部！");
-                            
-                            try {
-                                Log.d(TAG, "[点击探针] 准备调用原生 dismiss() 关闭面板...");
-                                dialogInstance.getClass().getMethod("dismiss").invoke(dialogInstance);
-                                Log.d(TAG, "[点击探针] 原生面板已关闭。");
-                            } catch (Throwable t) {
-                                Log.e(TAG, "[点击探针] 原生面板关闭失败: " + t);
-                            }
-
-                            // 延迟弹窗
-                            Log.d(TAG, "[点击探针] 启动 300ms 延迟任务，准备弹窗...");
-                            new Handler(Looper.getMainLooper()).postDelayed(() -> {
-                                Log.d(TAG, "[弹窗探针] 延迟时间到，开始执行弹窗代码！");
-                                
-                                Context appCtx = context.getApplicationContext();
-                                WindowManager wm = (WindowManager) appCtx.getSystemService(Context.WINDOW_SERVICE);
-                                if (wm == null) {
-                                    Log.e(TAG, "[弹窗探针] 失败：WindowManager 获取为空！");
-                                    return;
-                                }
-
-                                TextView tv = new TextView(appCtx);
-                                tv.setText("测试弹窗\n\n点击我关闭");
-                                tv.setTextSize(30);
-                                tv.setTextColor(Color.WHITE);
-                                tv.setBackgroundColor(Color.BLUE);
-                                tv.setGravity(Gravity.CENTER);
-                                
-                                // 为了防止应用层权限报错，我们用 TYPE_SYSTEM_ERROR，这是系统级最暴力的窗口
-                                WindowManager.LayoutParams p = new WindowManager.LayoutParams(
-                                        (int) (300 * appCtx.getResources().getDisplayMetrics().density), 
-                                        (int) (300 * appCtx.getResources().getDisplayMetrics().density),
-                                        WindowManager.LayoutParams.TYPE_SYSTEM_ERROR,
-                                        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-                                        PixelFormat.TRANSLUCENT
-                                );
-                                p.gravity = Gravity.CENTER;
-                                
-                                tv.setOnClickListener(view -> {
-                                    Log.d(TAG, "[弹窗探针] 用户点击了测试弹窗，准备移除。");
-                                    try {
-                                        wm.removeView(tv);
-                                    } catch (Throwable ignored) {}
-                                });
-
-                                try {
-                                    Log.d(TAG, "[弹窗探针] 准备调用 wm.addView()...");
-                                    wm.addView(tv, p);
-                                    Log.d(TAG, "[弹窗探针] 🎉 弹窗添加成功！你应该能看到蓝色方块了！");
-                                } catch (Throwable t) {
-                                    Log.e(TAG, "[弹窗探针] ❌ 弹窗添加失败: " + t);
-                                }
-                            }, 300); 
-                        });
-
-                        parent.addView(myButton, 0);
-                        Log.d(TAG, "🔥【注入成功】图标已塞入底部容器！");
+                    if (collectionObj instanceof Collection) {
+                        @SuppressWarnings("unchecked")
+                        Collection<View> touchableViews = (Collection<View>) collectionObj;
+                        touchableViews.add(myButton);
+                        Log.d(TAG, "🔥🔥【白名单注入成功】按钮已加入合法触摸区域集合！");
                     }
+                } else {
+                    Log.e(TAG, "❌ 没找到 ViewModel，无法注入白名单");
                 }
+
             } catch (Throwable t) {
                 Log.e(TAG, "【异常】注入 UI 失败: " + t);
             }
             return result;
         }
+    }
+
+    // 🌟 递归寻找特定类名的成员变量（用来在深层的嵌套里揪出 ViewModel）
+    private static Object findObjectByClassName(Object obj, String targetClassName) {
+        if (obj == null) return null;
+        if (obj.getClass().getName().equals(targetClassName)) return obj;
+
+        Class<?> clazz = obj.getClass();
+        while (clazz != null && clazz != Object.class) {
+            for (Field field : clazz.getDeclaredFields()) {
+                try {
+                    // 跳过基本数据类型和常见类，防止死循环
+                    if (field.getType().isPrimitive() || field.getType().getName().startsWith("java.")) continue;
+                    
+                    field.setAccessible(true);
+                    Object fieldValue = field.get(obj);
+                    if (fieldValue != null) {
+                        if (fieldValue.getClass().getName().equals(targetClassName)) {
+                            return fieldValue;
+                        }
+                        // 如果没找到，继续往下一层找
+                        Object result = findObjectByClassName(fieldValue, targetClassName);
+                        if (result != null) return result;
+                    }
+                } catch (Throwable ignored) {}
+            }
+            clazz = clazz.getSuperclass();
+        }
+        return null;
     }
 }
