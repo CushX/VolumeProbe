@@ -20,6 +20,7 @@ import android.widget.LinearLayout;
 import android.widget.SeekBar;
 import android.widget.TextView;
 
+import java.lang.reflect.Method;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -78,8 +79,21 @@ public class PanelUI {
         try {
             List<AudioPlaybackConfiguration> configs = audioManager.getActivePlaybackConfigurations();
             Set<Integer> activeUids = new HashSet<>();
+            
+            // 🌟 使用反射获取隐藏 API
             for (AudioPlaybackConfiguration config : configs) {
-                if (config.isActive()) activeUids.add(config.getClientUid());
+                try {
+                    Method isActiveMethod = config.getClass().getMethod("isActive");
+                    Method getClientUidMethod = config.getClass().getMethod("getClientUid");
+                    
+                    boolean isActive = (boolean) isActiveMethod.invoke(config);
+                    if (isActive) {
+                        int uid = (int) getClientUidMethod.invoke(config);
+                        activeUids.add(uid);
+                    }
+                } catch (Throwable t) {
+                    Log.e(TAG, "反射获取音频配置失败: " + t);
+                }
             }
 
             PackageManager pm = context.getPackageManager();
@@ -153,7 +167,6 @@ public class PanelUI {
         });
         column.addView(verticalSeekBar);
 
-        // 2. 下方图标
         ImageView iv = new ImageView(context);
         if (icon != null) {
             iv.setImageDrawable(icon);
@@ -169,7 +182,6 @@ public class PanelUI {
         iv.setLayoutParams(ivLp);
         column.addView(iv);
 
-        // 3. 下方文字
         TextView tv = new TextView(context);
         tv.setText(isSystem ? "系统" : title); 
         tv.setTextSize(10);
