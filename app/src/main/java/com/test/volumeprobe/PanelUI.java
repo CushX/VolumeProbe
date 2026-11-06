@@ -153,8 +153,101 @@ public class PanelUI {
         });
         column.addView(verticalSeekBar);
 
+        // 2. 下方图标
         ImageView iv = new ImageView(context);
         if (icon != null) {
             iv.setImageDrawable(icon);
         } else {
-            iv.se
+            iv.setImageResource(android.R.drawable.ic_lock_silent_mode_off);
+            iv.setColorFilter(Color.GRAY);
+        }
+        LinearLayout.LayoutParams ivLp = new LinearLayout.LayoutParams(
+                (int) (32 * context.getResources().getDisplayMetrics().density),
+                (int) (32 * context.getResources().getDisplayMetrics().density)
+        );
+        ivLp.topMargin = (int) (12 * context.getResources().getDisplayMetrics().density);
+        iv.setLayoutParams(ivLp);
+        column.addView(iv);
+
+        // 3. 下方文字
+        TextView tv = new TextView(context);
+        tv.setText(isSystem ? "系统" : title); 
+        tv.setTextSize(10);
+        tv.setTextColor(Color.GRAY);
+        tv.setGravity(Gravity.CENTER);
+        tv.setSingleLine(true);
+        tv.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        LinearLayout.LayoutParams tvLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        tvLp.topMargin = (int) (4 * context.getResources().getDisplayMetrics().density);
+        tv.setLayoutParams(tvLp);
+        column.addView(tv);
+
+        return column;
+    }
+
+    public static class MaxWidthLinearLayout extends LinearLayout {
+        private int maxWidth;
+
+        public MaxWidthLinearLayout(Context context, int maxWidth) {
+            super(context);
+            this.maxWidth = maxWidth;
+        }
+
+        @Override
+        protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+            int widthMode = MeasureSpec.getMode(widthMeasureSpec);
+            int widthSize = MeasureSpec.getSize(widthMeasureSpec);
+            if (widthSize > maxWidth) {
+                widthMeasureSpec = MeasureSpec.makeMeasureSpec(maxWidth, widthMode);
+            }
+            super.onMeasure(widthMeasureSpec, heightMeasureSpec);
+        }
+    }
+
+    public static class VerticalSeekBar extends SeekBar {
+        public VerticalSeekBar(Context context) {
+            super(context);
+        }
+
+        @Override
+        protected synchronized void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+            super.onMeasure(heightMeasureSpec, widthMeasureSpec);
+            setMeasuredDimension(getMeasuredHeight(), getMeasuredWidth());
+        }
+
+        @Override
+        protected void onDraw(Canvas c) {
+            c.rotate(-90);
+            c.translate(-getHeight(), 0);
+            super.onDraw(c);
+        }
+
+        private OnSeekBarChangeListener mOnSeekBarChangeListener;
+
+        @Override
+        public void setOnSeekBarChangeListener(OnSeekBarChangeListener l) {
+            super.setOnSeekBarChangeListener(l);
+            mOnSeekBarChangeListener = l;
+        }
+
+        @Override
+        public boolean onTouchEvent(MotionEvent event) {
+            if (!isEnabled()) return false;
+            switch (event.getAction()) {
+                case MotionEvent.ACTION_DOWN:
+                case MotionEvent.ACTION_MOVE:
+                case MotionEvent.ACTION_UP:
+                    float scale = getMax() / (float) getHeight();
+                    int progress = (int) (getMax() - (event.getY() * scale));
+                    if (progress < 0) progress = 0;
+                    if (progress > getMax()) progress = getMax();
+                    setProgress(progress);
+                    if (mOnSeekBarChangeListener != null) {
+                        mOnSeekBarChangeListener.onProgressChanged(this, progress, true);
+                    }
+                    return true;
+            }
+            return true;
+        }
+    }
+}
