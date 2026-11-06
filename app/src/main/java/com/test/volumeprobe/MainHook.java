@@ -2,13 +2,19 @@ package com.test.volumeprobe;
 
 import android.content.Context;
 import android.graphics.Color;
+import android.graphics.PixelFormat;
 import android.graphics.drawable.GradientDrawable;
+import android.os.Handler;
+import android.os.Looper;
 import android.util.Log;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.WindowManager;
 import android.widget.ImageButton;
 import android.widget.LinearLayout;
+import android.widget.TextView;
 import io.github.libxposed.api.XposedModule;
 import io.github.libxposed.api.XposedInterface;
 import io.github.libxposed.api.XposedModuleInterface;
@@ -65,7 +71,6 @@ public class MainHook extends XposedModule {
                         LinearLayout parent = (LinearLayout) bottomContainer;
                         if (parent.findViewWithTag(TAG_BUTTON) != null) return result; 
 
-                        // 🌟 关键：换成原生 ImageButton，强行开启焦点
                         ImageButton myButton = new ImageButton(context);
                         myButton.setTag(TAG_BUTTON); 
                         myButton.setImageResource(android.R.drawable.ic_menu_manage);
@@ -76,10 +81,6 @@ public class MainHook extends XposedModule {
                         shape.setShape(GradientDrawable.OVAL);
                         shape.setColor(Color.parseColor("#EADDFF"));
                         myButton.setBackground(shape);
-                        
-                        myButton.setClickable(true);
-                        myButton.setFocusable(true);
-                        myButton.setFocusableInTouchMode(true);
 
                         int btnSize = (int) (36 * context.getResources().getDisplayMetrics().density);
                         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(btnSize, btnSize);
@@ -88,31 +89,79 @@ public class MainHook extends XposedModule {
                         lp.bottomMargin = (int) (4 * context.getResources().getDisplayMetrics().density);
                         myButton.setLayoutParams(lp);
 
-                        // 🌟 触摸探针：拦截并触发
+                        // 🌟 探针 1：监控触摸事件
                         myButton.setOnTouchListener((v, event) -> {
-                            if (event.getAction() == android.view.MotionEvent.ACTION_DOWN) {
-                                Log.d(TAG, "触摸：按下了图标！");
-                                return true; // 吃掉 DOWN 事件
-                            } else if (event.getAction() == android.view.MotionEvent.ACTION_UP) {
-                                Log.d(TAG, "触摸：松开了图标，准备弹窗！");
-                                v.performClick(); // 触发点击事件
+                            if (event.getAction() == MotionEvent.ACTION_DOWN) {
+                                Log.d(TAG, "[触摸探针] 按下了图标！(ACTION_DOWN)");
+                                return true; 
+                            } else if (event.getAction() == MotionEvent.ACTION_UP) {
+                                Log.d(TAG, "[触摸探针] 松开了图标！(ACTION_UP)");
+                                v.performClick(); 
                                 return true;
                             }
                             return false;
                         });
 
+                        // 🌟 探针 2：监控点击逻辑
                         myButton.setOnClickListener(v -> {
-                            Log.d(TAG, "👆 点击触发：准备弹面板");
-                            try {
-                                dialogInstance.getClass().getMethod("dismiss").invoke(dialogInstance);
-                            } catch (Throwable t) {}
+                            Log.d(TAG, "[点击探针] 成功进入 onClick 内部！");
                             
-                            // 调用新版面板
-                            PanelUI.show(context);
+                            try {
+                                Log.d(TAG, "[点击探针] 准备调用原生 dismiss() 关闭面板...");
+                                dialogInstance.getClass().getMethod("dismiss").invoke(dialogInstance);
+                                Log.d(TAG, "[点击探针] 原生面板已关闭。");
+                            } catch (Throwable t) {
+                                Log.e(TAG, "[点击探针] 原生面板关闭失败: " + t);
+                            }
+
+                            // 延迟弹窗
+                            Log.d(TAG, "[点击探针] 启动 300ms 延迟任务，准备弹窗...");
+                            new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                                Log.d(TAG, "[弹窗探针] 延迟时间到，开始执行弹窗代码！");
+                                
+                                Context appCtx = context.getApplicationContext();
+                                WindowManager wm = (WindowManager) appCtx.getSystemService(Context.WINDOW_SERVICE);
+                                if (wm == null) {
+                                    Log.e(TAG, "[弹窗探针] 失败：WindowManager 获取为空！");
+                                    return;
+                                }
+
+                                TextView tv = new TextView(appCtx);
+                                tv.setText("测试弹窗\n\n点击我关闭");
+                                tv.setTextSize(30);
+                                tv.setTextColor(Color.WHITE);
+                                tv.setBackgroundColor(Color.BLUE);
+                                tv.setGravity(Gravity.CENTER);
+                                
+                                // 为了防止应用层权限报错，我们用 TYPE_SYSTEM_ERROR，这是系统级最暴力的窗口
+                                WindowManager.LayoutParams p = new WindowManager.LayoutParams(
+                                        (int) (300 * appCtx.getResources().getDisplayMetrics().density), 
+                                        (int) (300 * appCtx.getResources().getDisplayMetrics().density),
+                                        WindowManager.LayoutParams.TYPE_SYSTEM_ERROR,
+                                        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                                        PixelFormat.TRANSLUCENT
+                                );
+                                p.gravity = Gravity.CENTER;
+                                
+                                tv.setOnClickListener(view -> {
+                                    Log.d(TAG, "[弹窗探针] 用户点击了测试弹窗，准备移除。");
+                                    try {
+                                        wm.removeView(tv);
+                                    } catch (Throwable ignored) {}
+                                });
+
+                                try {
+                                    Log.d(TAG, "[弹窗探针] 准备调用 wm.addView()...");
+                                    wm.addView(tv, p);
+                                    Log.d(TAG, "[弹窗探针] 🎉 弹窗添加成功！你应该能看到蓝色方块了！");
+                                } catch (Throwable t) {
+                                    Log.e(TAG, "[弹窗探针] ❌ 弹窗添加失败: " + t);
+                                }
+                            }, 300); 
                         });
 
                         parent.addView(myButton, 0);
-                        Log.d(TAG, "🔥【注入成功】图标已塞入！");
+                        Log.d(TAG, "🔥【注入成功】图标已塞入底部容器！");
                     }
                 }
             } catch (Throwable t) {
