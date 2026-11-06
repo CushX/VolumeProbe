@@ -3,9 +3,11 @@ package com.test.volumeprobe;
 import android.content.Context;
 import android.graphics.Color;
 import android.util.Log;
+import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.TextView;
+import android.widget.FrameLayout;
+import android.widget.ImageView;
 import io.github.libxposed.api.XposedModule;
 import io.github.libxposed.api.XposedInterface;
 import io.github.libxposed.api.XposedModuleInterface;
@@ -13,10 +15,7 @@ import java.lang.reflect.Method;
 
 public class MainHook extends XposedModule {
     private static final String TAG = "VolumeProbe";
-    
-    // 静态开关，确保 UI 树只打印一次，按钮只注入一次
-    private static boolean hasDumped = false;
-    private static boolean hasInjected = false;
+    private static final String TAG_BUTTON = "MyCustomVolumeButton";
 
     @Override
     public void onModuleLoaded(XposedModuleInterface.ModuleLoadedParam param) {
@@ -32,8 +31,6 @@ public class MainHook extends XposedModule {
         try {
             ClassLoader cl = param.getDefaultClassLoader();
             Class<?> clazz = cl.loadClass("com.android.systemui.volume.dialog.VolumeDialog");
-
-            // 🌟 这次挂载 onStart，保证每次弹面板必定能抓到
             for (Method method : clazz.getDeclaredMethods()) {
                 if (method.getName().equals("onStart")) {
                     hook(method).intercept(new UIInjectorHooker());
@@ -48,77 +45,58 @@ public class MainHook extends XposedModule {
     private static class UIInjectorHooker implements XposedInterface.Hooker {
         @Override
         public Object intercept(XposedInterface.Chain chain) throws Throwable {
-            Object result = chain.proceed(); // 先让系统正常显示面板
-            
+            Object result = chain.proceed();
             try {
-                if (hasInjected && hasDumped) return result; // 如果已经做过，直接返回
-
                 Object dialogInstance = chain.getThisObject(); 
-                Method requireViewByIdMethod = dialogInstance.getClass().getMethod("requireViewById", int.class);
+                Context context = (Context) dialogInstance.getClass().getMethod("getContext").invoke(dialogInstance);
+                Object window = dialogInstance.getClass().getMethod("getWindow").invoke(dialogInstance);
+                if (window == null) return result;
+                Object decorView = window.getClass().getMethod("getDecorView").invoke(window);
+                if (!(decorView instanceof ViewGroup)) return result;
+                ViewGroup rootContainer = (ViewGroup) decorView;
+
+                int topContainerId = context.getResources().getIdentifier("volume_dialog_top_section_container", "id", "com.android.systemui");
+                int nativeSettingsId = context.getResources().getIdentifier("volume_dialog_settings", "id", "com.android.systemui");
                 
-                // 获取我们在 smali 里发现的根视图 ID
-                Object containerView = requireViewByIdMethod.invoke(dialogInstance, 0x7f0a09cc);
-                
-                if (!(containerView instanceof ViewGroup)) return result;
-                ViewGroup rootContainer = (ViewGroup) containerView;
+                if (topContainerId != 0 && nativeSettingsId != 0) {
+                    View topContainer = rootContainer.findViewById(topContainerId);
+                    View nativeSettingsBtn = rootContainer.findViewById(nativeSettingsId);
+                    
+                    if (topContainer instanceof ViewGroup && nativeSettingsBtn != null) {
+                        ViewGroup parent = (ViewGroup) topContainer;
+                        if (parent.findViewWithTag(TAG_BUTTON) != null) return result; 
 
-                // 🌟 1. 打印整棵 UI 树
-                if (!hasDumped) {
-                    Log.d(TAG, "========== [UI树] 开始打印 ==========");
-                    dumpViewHierarchy(rootContainer, 0);
-                    Log.d(TAG, "========== [UI树] 打印结束 ==========");
-                    hasDumped = true;
+                        ImageView myButton = new ImageView(context);
+                        myButton.setTag(TAG_BUTTON); 
+                        myButton.setImageResource(android.R.drawable.ic_menu_manage);
+                        myButton.setColorFilter(Color.parseColor("#6750A4")); 
+                        myButton.setBackgroundResource(android.R.drawable.list_selector_background);
+
+                        ViewGroup.LayoutParams nativeLp = nativeSettingsBtn.getLayoutParams();
+                        int targetWidth = nativeLp != null ? nativeLp.width : (int) (48 * context.getResources().getDisplayMetrics().density);
+                        int targetHeight = nativeLp != null ? nativeLp.height : (int) (48 * context.getResources().getDisplayMetrics().density);
+
+                        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(targetWidth, targetHeight);
+                        lp.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
+                        lp.bottomMargin = (int) (4 * context.getResources().getDisplayMetrics().density);
+                        myButton.setLayoutParams(lp);
+
+                        myButton.setOnClickListener(v -> {
+                            try {
+                                dialogInstance.getClass().getMethod("dismiss").invoke(dialogInstance);
+                            } catch (Throwable t) {}
+                            // 🌟 调用拆出去的面板 UI
+                            PanelUI.show(context);
+                        });
+
+                        parent.addView(myButton);
+                        Log.d(TAG, "🔥【注入成功】图标已注入！");
+                    }
                 }
-
-                // 🌟 2. 注入按钮
-                if (!hasInjected) {
-                    Context context = rootContainer.getContext();
-                    TextView myButton = new TextView(context);
-                    myButton.setText("⚙️ 测试注入");
-                    myButton.setTextColor(Color.WHITE);
-                    myButton.setBackgroundColor(Color.parseColor("#2196F3")); // 蓝色
-                    myButton.setTextSize(12);
-                    int pad = (int) (8 * context.getResources().getDisplayMetrics().density);
-                    myButton.setPadding(pad, pad, pad, pad);
-
-                    rootContainer.addView(myButton);
-                    Log.d(TAG, "🔥 按钮已塞入根容器！");
-                    hasInjected = true;
-                }
-
             } catch (Throwable t) {
-                Log.e(TAG, "注入 UI 失败: " + t);
+                Log.e(TAG, "【异常】注入 UI 失败: " + t);
             }
-
             return result;
         }
     }
-
-    // 递归打印 View 树
-    private static void dumpViewHierarchy(View view, int depth) {
-        if (view == null) return;
-
-        StringBuilder indent = new StringBuilder();
-        for (int i = 0; i < depth; i++) indent.append("  ");
-
-        String viewName = view.getClass().getSimpleName();
-        String idName = "NO_ID";
-        try {
-            int id = view.getId();
-            if (id != View.NO_ID) {
-                idName = view.getResources().getResourceEntryName(id);
-            }
-        } catch (Throwable ignored) {}
-
-        Log.d(TAG, "[UI树] " + indent + "-> " + viewName + " (id: " + idName + ")");
-
-        if (view instanceof ViewGroup) {
-            ViewGroup group = (ViewGroup) view;
-            for (int i = 0; i < group.getChildCount(); i++) {
-                dumpViewHierarchy(group.getChildAt(i), depth + 1);
-            }
-        }
-    }
-
-    public MainHook() {}
 }
