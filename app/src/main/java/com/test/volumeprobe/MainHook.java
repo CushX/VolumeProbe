@@ -2,6 +2,7 @@ package com.test.volumeprobe;
 
 import android.content.Context;
 import android.graphics.Color;
+import android.graphics.drawable.GradientDrawable;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
@@ -55,43 +56,63 @@ public class MainHook extends XposedModule {
                 if (!(decorView instanceof ViewGroup)) return result;
                 ViewGroup rootContainer = (ViewGroup) decorView;
 
+                // 🌟 核心：回到顶部的容器！这个容器横跨整个白色面板，不会再跑偏。
                 int topContainerId = context.getResources().getIdentifier("volume_dialog_top_section_container", "id", "com.android.systemui");
-                int nativeSettingsId = context.getResources().getIdentifier("volume_dialog_settings", "id", "com.android.systemui");
                 
-                if (topContainerId != 0 && nativeSettingsId != 0) {
+                if (topContainerId != 0) {
                     View topContainer = rootContainer.findViewById(topContainerId);
-                    View nativeSettingsBtn = rootContainer.findViewById(nativeSettingsId);
                     
-                    if (topContainer instanceof ViewGroup && nativeSettingsBtn != null) {
-                        ViewGroup parent = (ViewGroup) topContainer;
+                    if (topContainer instanceof FrameLayout) {
+                        FrameLayout parent = (FrameLayout) topContainer;
+                        
                         if (parent.findViewWithTag(TAG_BUTTON) != null) return result; 
 
+                        // 创建图标按钮
                         ImageView myButton = new ImageView(context);
                         myButton.setTag(TAG_BUTTON); 
                         myButton.setImageResource(android.R.drawable.ic_menu_manage);
                         myButton.setColorFilter(Color.parseColor("#6750A4")); 
-                        myButton.setBackgroundResource(android.R.drawable.list_selector_background);
+                        myButton.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
+                        
+                        // 圆形背景，扩大点击范围，防止手指点偏导致点穿
+                        GradientDrawable shape = new GradientDrawable();
+                        shape.setShape(GradientDrawable.OVAL);
+                        shape.setColor(Color.parseColor("#EADDFF"));
+                        myButton.setBackground(shape);
+                        
+                        int pad = (int) (4 * context.getResources().getDisplayMetrics().density);
+                        myButton.setPadding(pad, pad, pad, pad);
+                        
+                        // 🌟 极其关键：阻断触摸事件，防止点穿导致面板消失
+                        myButton.setClickable(true);
+                        myButton.setFocusable(true);
+                        myButton.setOnTouchListener((v, event) -> false); // 消费掉事件
 
-                        ViewGroup.LayoutParams nativeLp = nativeSettingsBtn.getLayoutParams();
-                        int targetWidth = nativeLp != null ? nativeLp.width : (int) (48 * context.getResources().getDisplayMetrics().density);
-                        int targetHeight = nativeLp != null ? nativeLp.height : (int) (48 * context.getResources().getDisplayMetrics().density);
-
-                        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(targetWidth, targetHeight);
+                        // 🌟 对齐到顶部容器的【最底部居中】
+                        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
+                                (int) (32 * context.getResources().getDisplayMetrics().density), 
+                                (int) (32 * context.getResources().getDisplayMetrics().density)
+                        );
                         lp.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
-                        lp.bottomMargin = (int) (4 * context.getResources().getDisplayMetrics().density);
+                        // 留出一点 margin，免得和下方的滑条贴在一起
+                        lp.bottomMargin = (int) (8 * context.getResources().getDisplayMetrics().density);
+                        
                         myButton.setLayoutParams(lp);
 
+                        // 点击事件
                         myButton.setOnClickListener(v -> {
+                            Log.d(TAG, "👆 点击了分应用图标！");
                             try {
                                 dialogInstance.getClass().getMethod("dismiss").invoke(dialogInstance);
                             } catch (Throwable t) {}
-                            // 🌟 调用拆出去的面板 UI
                             PanelUI.show(context);
                         });
 
                         parent.addView(myButton);
-                        Log.d(TAG, "🔥【注入成功】图标已注入！");
+                        Log.d(TAG, "🔥【注入成功】图标已放在顶部容器底部居中！");
                     }
+                } else {
+                    Log.e(TAG, "❌ 找不到 volume_dialog_top_section_container");
                 }
             } catch (Throwable t) {
                 Log.e(TAG, "【异常】注入 UI 失败: " + t);
