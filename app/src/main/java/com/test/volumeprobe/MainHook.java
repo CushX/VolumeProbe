@@ -7,9 +7,8 @@ import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.ImageView;
+import android.widget.ImageButton;
 import android.widget.LinearLayout;
-import android.widget.Toast;
 import io.github.libxposed.api.XposedModule;
 import io.github.libxposed.api.XposedInterface;
 import io.github.libxposed.api.XposedModuleInterface;
@@ -66,16 +65,21 @@ public class MainHook extends XposedModule {
                         LinearLayout parent = (LinearLayout) bottomContainer;
                         if (parent.findViewWithTag(TAG_BUTTON) != null) return result; 
 
-                        ImageView myButton = new ImageView(context);
+                        // 🌟 关键：换成原生 ImageButton，强行开启焦点
+                        ImageButton myButton = new ImageButton(context);
                         myButton.setTag(TAG_BUTTON); 
                         myButton.setImageResource(android.R.drawable.ic_menu_manage);
                         myButton.setColorFilter(Color.parseColor("#6750A4")); 
-                        myButton.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
+                        myButton.setScaleType(android.widget.ImageView.ScaleType.CENTER_INSIDE);
                         
                         GradientDrawable shape = new GradientDrawable();
                         shape.setShape(GradientDrawable.OVAL);
                         shape.setColor(Color.parseColor("#EADDFF"));
                         myButton.setBackground(shape);
+                        
+                        myButton.setClickable(true);
+                        myButton.setFocusable(true);
+                        myButton.setFocusableInTouchMode(true);
 
                         int btnSize = (int) (36 * context.getResources().getDisplayMetrics().density);
                         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(btnSize, btnSize);
@@ -84,29 +88,31 @@ public class MainHook extends XposedModule {
                         lp.bottomMargin = (int) (4 * context.getResources().getDisplayMetrics().density);
                         myButton.setLayoutParams(lp);
 
-                        myButton.setOnClickListener(v -> {
-                            // 🌟 探针：先弹个 Toast，证明点击确实生效了
-                            Toast.makeText(context, "点击成功，准备弹面板", Toast.LENGTH_SHORT).show();
-                            Log.d(TAG, "👆 点击了分应用图标！");
+                        // 🌟 触摸探针：拦截并触发
+                        myButton.setOnTouchListener((v, event) -> {
+                            if (event.getAction() == android.view.MotionEvent.ACTION_DOWN) {
+                                Log.d(TAG, "触摸：按下了图标！");
+                                return true; // 吃掉 DOWN 事件
+                            } else if (event.getAction() == android.view.MotionEvent.ACTION_UP) {
+                                Log.d(TAG, "触摸：松开了图标，准备弹窗！");
+                                v.performClick(); // 触发点击事件
+                                return true;
+                            }
+                            return false;
+                        });
 
-                            // 关闭原生面板
+                        myButton.setOnClickListener(v -> {
+                            Log.d(TAG, "👆 点击触发：准备弹面板");
                             try {
                                 dialogInstance.getClass().getMethod("dismiss").invoke(dialogInstance);
-                            } catch (Throwable t) {
-                                Log.e(TAG, "关闭原生面板失败", t);
-                            }
-
-                            // 调用面板 UI
-                            try {
-                                PanelUI.show(context);
-                            } catch (Throwable t) {
-                                Log.e(TAG, "❌ PanelUI 弹窗崩溃: " + t);
-                                Toast.makeText(context, "弹窗失败: " + t.getMessage(), Toast.LENGTH_LONG).show();
-                            }
+                            } catch (Throwable t) {}
+                            
+                            // 调用新版面板
+                            PanelUI.show(context);
                         });
 
                         parent.addView(myButton, 0);
-                        Log.d(TAG, "🔥【注入成功】图标已稳稳塞入底部容器最上方！");
+                        Log.d(TAG, "🔥【注入成功】图标已塞入！");
                     }
                 }
             } catch (Throwable t) {
