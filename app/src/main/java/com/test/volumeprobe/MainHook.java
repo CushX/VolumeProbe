@@ -9,6 +9,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.Toast;
 import io.github.libxposed.api.XposedModule;
 import io.github.libxposed.api.XposedInterface;
 import io.github.libxposed.api.XposedModuleInterface;
@@ -56,7 +57,6 @@ public class MainHook extends XposedModule {
                 if (!(decorView instanceof ViewGroup)) return result;
                 ViewGroup rootContainer = (ViewGroup) decorView;
 
-                // 🌟 直接找底部容器（它是一个最稳定的 LinearLayout）
                 int bottomContainerId = context.getResources().getIdentifier("volume_dialog_bottom_section_container", "id", "com.android.systemui");
                 
                 if (bottomContainerId != 0) {
@@ -64,46 +64,48 @@ public class MainHook extends XposedModule {
                     
                     if (bottomContainer instanceof LinearLayout) {
                         LinearLayout parent = (LinearLayout) bottomContainer;
-                        
-                        // 防止重复添加
                         if (parent.findViewWithTag(TAG_BUTTON) != null) return result; 
 
-                        // 创建图标
                         ImageView myButton = new ImageView(context);
                         myButton.setTag(TAG_BUTTON); 
                         myButton.setImageResource(android.R.drawable.ic_menu_manage);
                         myButton.setColorFilter(Color.parseColor("#6750A4")); 
                         myButton.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
                         
-                        // 浅紫色圆形背景
                         GradientDrawable shape = new GradientDrawable();
                         shape.setShape(GradientDrawable.OVAL);
                         shape.setColor(Color.parseColor("#EADDFF"));
                         myButton.setBackground(shape);
 
-                        // 设置宽高，比如 36dp x 36dp
                         int btnSize = (int) (36 * context.getResources().getDisplayMetrics().density);
                         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(btnSize, btnSize);
-                        
-                        // 关键：让它水平居中，并且加一点上下边距
                         lp.gravity = Gravity.CENTER_HORIZONTAL;
                         lp.topMargin = (int) (8 * context.getResources().getDisplayMetrics().density);
                         lp.bottomMargin = (int) (4 * context.getResources().getDisplayMetrics().density);
-                        
                         myButton.setLayoutParams(lp);
 
-                        // 点击事件
                         myButton.setOnClickListener(v -> {
+                            // 🌟 探针：先弹个 Toast，证明点击确实生效了
+                            Toast.makeText(context, "点击成功，准备弹面板", Toast.LENGTH_SHORT).show();
                             Log.d(TAG, "👆 点击了分应用图标！");
+
+                            // 关闭原生面板
                             try {
                                 dialogInstance.getClass().getMethod("dismiss").invoke(dialogInstance);
-                            } catch (Throwable t) {}
-                            PanelUI.show(context);
+                            } catch (Throwable t) {
+                                Log.e(TAG, "关闭原生面板失败", t);
+                            }
+
+                            // 调用面板 UI
+                            try {
+                                PanelUI.show(context);
+                            } catch (Throwable t) {
+                                Log.e(TAG, "❌ PanelUI 弹窗崩溃: " + t);
+                                Toast.makeText(context, "弹窗失败: " + t.getMessage(), Toast.LENGTH_LONG).show();
+                            }
                         });
 
-                        // 🌟 直接加到索引 0 的位置，也就是把原生的齿轮/字幕按钮往下挤
                         parent.addView(myButton, 0);
-                        
                         Log.d(TAG, "🔥【注入成功】图标已稳稳塞入底部容器最上方！");
                     }
                 }
