@@ -1,11 +1,12 @@
 package com.test.volumeprobe;
 
+import android.app.AlertDialog;
 import android.content.Context;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.graphics.Canvas;
 import android.graphics.Color;
-import android.graphics.PixelFormat;
+import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
 import android.media.AudioManager;
 import android.media.AudioPlaybackConfiguration;
@@ -33,20 +34,12 @@ public class PanelUI {
         AudioManager audioManager = (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
         if (audioManager == null) return;
 
-        WindowManager windowManager = (WindowManager) context.getSystemService(Context.WINDOW_SERVICE);
-        if (windowManager == null) return;
-
         int screenWidth = context.getResources().getDisplayMetrics().widthPixels;
         int maxPanelWidth = (int) (screenWidth * 0.5f);
 
         MaxWidthLinearLayout mainLayout = new MaxWidthLinearLayout(context, maxPanelWidth);
         mainLayout.setOrientation(LinearLayout.VERTICAL);
-        
-        android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable();
-        bg.setColor(Color.WHITE);
-        bg.setCornerRadius(30);
-        mainLayout.setBackground(bg);
-        
+        mainLayout.setBackgroundColor(Color.WHITE);
         int pad = (int) (16 * context.getResources().getDisplayMetrics().density);
         mainLayout.setPadding(pad, pad, pad, pad);
 
@@ -127,25 +120,23 @@ public class PanelUI {
         scrollView.addView(trackLayout);
         mainLayout.addView(scrollView);
 
-        WindowManager.LayoutParams params = new WindowManager.LayoutParams();
-        params.width = WindowManager.LayoutParams.WRAP_CONTENT;
-        params.height = WindowManager.LayoutParams.WRAP_CONTENT;
-        params.type = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY;
-        params.format = PixelFormat.TRANSLUCENT;
-        params.gravity = Gravity.CENTER;
-        params.flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
+        // 🌟 强制系统级弹窗
+        AlertDialog.Builder builder = new AlertDialog.Builder(context, android.R.style.Theme_DeviceDefault_Dialog_Alert);
+        builder.setView(mainLayout);
+        AlertDialog dialog = builder.create();
 
-        mainLayout.setOnClickListener(v -> {
-            try {
-                windowManager.removeView(mainLayout);
-            } catch (Throwable ignored) {}
-        });
+        if (dialog.getWindow() != null) {
+            dialog.getWindow().setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+            // 强行指定窗口类型，突破权限限制
+            dialog.getWindow().setType(WindowManager.LayoutParams.TYPE_SYSTEM_ERROR);
+            dialog.getWindow().setLayout(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        }
 
         try {
-            windowManager.addView(mainLayout, params);
-            Log.d(TAG, "🔥 自定义面板已通过 WindowManager 成功弹出！");
+            dialog.show();
+            Log.d(TAG, "🔥 面板已成功弹出！");
         } catch (Throwable t) {
-            Log.e(TAG, "❌ WindowManager 弹窗失败: " + t);
+            Log.e(TAG, "❌ 弹窗崩溃: " + t);
         }
     }
 
