@@ -5,6 +5,7 @@ import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
 import android.util.Log;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
@@ -56,50 +57,41 @@ public class MainHook extends XposedModule {
                 if (!(decorView instanceof ViewGroup)) return result;
                 ViewGroup rootContainer = (ViewGroup) decorView;
 
-                // 🌟 核心：回到顶部的容器！这个容器横跨整个白色面板，不会再跑偏。
-                int topContainerId = context.getResources().getIdentifier("volume_dialog_top_section_container", "id", "com.android.systemui");
-                
-                if (topContainerId != 0) {
-                    View topContainer = rootContainer.findViewById(topContainerId);
+                // 🌟 拿最外层的白色面板容器
+                int dialogRootId = context.getResources().getIdentifier("volume_dialog", "id", "com.android.systemui");
+                // 🌟 拿原生静音按钮，作为位置参考
+                int muteBtnId = context.getResources().getIdentifier("volume_dialog_top_section_container", "id", "com.android.systemui");
+
+                if (dialogRootId != 0 && muteBtnId != 0) {
+                    View dialogRoot = rootContainer.findViewById(dialogRootId);
+                    View muteContainer = rootContainer.findViewById(muteBtnId);
                     
-                    if (topContainer instanceof FrameLayout) {
-                        FrameLayout parent = (FrameLayout) topContainer;
+                    if (dialogRoot instanceof ViewGroup && muteContainer != null) {
+                        ViewGroup parent = (ViewGroup) dialogRoot;
                         
                         if (parent.findViewWithTag(TAG_BUTTON) != null) return result; 
 
-                        // 创建图标按钮
+                        // 创建图标
                         ImageView myButton = new ImageView(context);
                         myButton.setTag(TAG_BUTTON); 
                         myButton.setImageResource(android.R.drawable.ic_menu_manage);
                         myButton.setColorFilter(Color.parseColor("#6750A4")); 
                         myButton.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
                         
-                        // 圆形背景，扩大点击范围，防止手指点偏导致点穿
+                        // 圆形背景，防止点击穿透
                         GradientDrawable shape = new GradientDrawable();
                         shape.setShape(GradientDrawable.OVAL);
                         shape.setColor(Color.parseColor("#EADDFF"));
                         myButton.setBackground(shape);
                         
-                        int pad = (int) (4 * context.getResources().getDisplayMetrics().density);
-                        myButton.setPadding(pad, pad, pad, pad);
-                        
-                        // 🌟 极其关键：阻断触摸事件，防止点穿导致面板消失
-                        myButton.setClickable(true);
-                        myButton.setFocusable(true);
-                        myButton.setOnTouchListener((v, event) -> false); // 消费掉事件
+                        // 🌟 暴力防穿透：拦截所有触摸事件，让系统认为这里有一堵墙
+                        myButton.setOnTouchListener((v, event) -> {
+                            if (event.getAction() == MotionEvent.ACTION_UP) {
+                                v.performClick();
+                            }
+                            return true; // 吃掉所有事件，绝不传出去
+                        });
 
-                        // 🌟 对齐到顶部容器的【最底部居中】
-                        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
-                                (int) (32 * context.getResources().getDisplayMetrics().density), 
-                                (int) (32 * context.getResources().getDisplayMetrics().density)
-                        );
-                        lp.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
-                        // 留出一点 margin，免得和下方的滑条贴在一起
-                        lp.bottomMargin = (int) (8 * context.getResources().getDisplayMetrics().density);
-                        
-                        myButton.setLayoutParams(lp);
-
-                        // 点击事件
                         myButton.setOnClickListener(v -> {
                             Log.d(TAG, "👆 点击了分应用图标！");
                             try {
@@ -108,11 +100,31 @@ public class MainHook extends XposedModule {
                             PanelUI.show(context);
                         });
 
+                        // 🌟 手动定位：找静音按钮底部的位置
+                        // 获取静音容器底部的 Y 坐标
+                        int muteBottomY = muteContainer.getBottom();
+                        
+                        // 使用绝对布局参数放进去
+                        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
+                                (int) (36 * context.getResources().getDisplayMetrics().density), 
+                                (int) (36 * context.getResources().getDisplayMetrics().density)
+                        );
+                        
+                        // 居中，并在静音键正下方
+                        lp.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
+                        
+                        // 因为在垂直面板中，muteContainer 往往是在最顶部。
+                        // 我们可以通过 marginTop 把它往下推。先设定一个基础值，如果位置不对，可以微调这里
+                        lp.topMargin = (int) (80 * context.getResources().getDisplayMetrics().density); 
+                        
+                        myButton.setLayoutParams(lp);
+
+                        // 确保它被加到最顶层
                         parent.addView(myButton);
-                        Log.d(TAG, "🔥【注入成功】图标已放在顶部容器底部居中！");
+                        parent.bringChildToFront(myButton);
+                        
+                        Log.d(TAG, "🔥【注入成功】带防穿透功能的图标已悬浮！");
                     }
-                } else {
-                    Log.e(TAG, "❌ 找不到 volume_dialog_top_section_container");
                 }
             } catch (Throwable t) {
                 Log.e(TAG, "【异常】注入 UI 失败: " + t);
